@@ -1,0 +1,23 @@
+[project]
+name = "std-scripted-asr"
+version = "0.0.1"
+description = "Scripted streaming Standard ASR engine used as a protocol test double for standard-asr-live."
+readme = "../../README.md"
+requires-python = ">=3.10"
+dependencies = ["standard-asr>=0.1.0"]
+
+[tool.uv.sources]
+standard-asr = { path = "../../../standard_asr", editable = true }
+
+# A streaming engine the live app can discover and drive end-to-end. Used only in
+# tests / opt-in demos; the application code never imports it.
+[project.entry-points."standard_asr.models"]
+"scripted/demo" = "scripted_engine:create"
+
+[build-system]
+requires = ["uv-build>=0.9,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = "src"
+module-name = "scripted_engine"

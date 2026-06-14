@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.pyright/
+
+# uv
+uv.lock
+
+# OS
+.DS_Store
+
+# Verification: keep the scripts, the tiny-preset plugin, and the small text
+# evidence (traces, exported transcripts/subtitles) committed so a reviewer can
+# see results without re-running. Ignore only regenerable binary / bulky outputs.
+verification/*.wav
+verification/*.jsonl
+</content>

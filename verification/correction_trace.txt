@@ -1,0 +1,60 @@
+==============================================================================
+LIVE CORRECTION TRACE — scripted/demo through a real protocol session
+==============================================================================
+
+[01] EVENT partial
+  [partial] []<the quik>
+
+[02] EVENT partial
+  [partial] [the ]<quick brown>
+
+[03] EVENT final
+  [final ] 'the quick brown fox'
+
+[04] EVENT supersede  old=['seg-0'] -> new=['seg-1', 'seg-2']
+  [RETIRED] 'the quick brown fox'  (struck through on screen)
+
+[05] EVENT partial
+  [partial] [the ]<quick>
+
+[06] EVENT final
+  [final ] 'the quick '
+
+[07] EVENT partial
+  [final ] 'the quick '
+  [partial] [brown ]<fox>
+
+[08] EVENT final
+  [final ] 'the quick '
+  [final ] 'brown fox jumps'
+
+[09] EVENT partial
+  [final ] 'the quick '
+  [final ] 'brown fox jumps'
+  [partial] [over the]< lazy dog>
+
+[10] EVENT final
+  [final ] 'the quick '
+  [final ] 'brown fox jumps'
+  [closed] 'Over the lazy dog.'
+
+[11] EVENT error  code=content_lost recoverable=True
+  [final ] 'the quick '
+  [final ] 'brown fox jumps'
+  [closed] 'Over the lazy dog.'
+
+[12] EVENT progress
+  [final ] 'the quick '
+  [final ] 'brown fox jumps'
+  [closed] 'Over the lazy dog.'
+
+[13] EVENT done
+  [final ] 'the quick '
+  [final ] 'brown fox jumps'
+  [closed] 'Over the lazy dog.'
+
+==============================================================================
+FINAL committed transcript: 'the quick  brown fox jumps Over the lazy dog.'
+recoverable errors shown  : ['content_lost']
+suppression diagnostics   : []
+counts                    : {'partial': 5, 'final': 4, 'supersede': 1, 'error': 1, 'progress': 1, 'done': 1}

@@ -1,0 +1,27 @@
+1
+00:00:00,000 --> 00:00:07,800
+This is a crazy interesting test for testing the capabilities and initial prototype of
+
+2
+00:00:07,800 --> 00:00:16,140
+standard ASR package. By doing this we are creating a sample plugin implementation for
+
+3
+00:00:16,140 --> 00:00:23,420
+faster whisper and Q and 3AASR. Both are really good ASR engine, so we're going to try
+
+4
+00:00:23,420 --> 00:00:34,420
+out and see if we can implement the plugin for these two ASR engines. By doing this
+
+5
+00:00:34,420 --> 00:00:40,700
+we will be able to understand the potential issues and whether our design actually
+
+6
+00:00:40,700 --> 00:00:48,700
+working in the real real world scenario, because we have been nearly designing
+
+7
+00:00:48,700 --> 00:00:56,300
+things for a very long time. Now is the time to put the design into test, complete.

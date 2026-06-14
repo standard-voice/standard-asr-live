@@ -1,0 +1,79 @@
+[project]
+name = "standard-asr-live"
+version = "0.1.0"
+description = "Live streaming speech-to-text in the terminal, with real-time corrections, against any Standard ASR engine."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Standard Voice Contributors" }]
+keywords = ["asr", "speech-to-text", "streaming", "captions", "standard-asr", "terminal", "tui"]
+
+# Engine-agnostic by construction: we depend ONLY on the protocol (standard-asr)
+# plus our UI / audio libraries. We never depend on a concrete ASR engine.
+dependencies = [
+    "standard-asr @ git+https://github.com/standard-voice/standard_asr.git@refactor/v0.1.0-redesign",
+    "rich>=13.7",
+    "sounddevice>=0.4.6",   # microphone capture (live input)
+    "soundfile>=0.12.1",    # robust audio decode fallback alongside ffmpeg
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+# Real-engine demos. Installing these is how an end user gets a working engine;
+# the app discovers them via entry points and never imports them.
+faster-whisper = ["std-faster-whisper"]
+
+[project.scripts]
+standard-asr-live = "standard_asr_live.cli:main"
+
+# Local development override: resolve `standard-asr` (and the cookbook demo
+# engines) from the local monorepo checkout instead of fetching the git branch
+# over the network. The `[project]` dependency above stays pinned to the public
+# git branch for a publish-ready manifest; this block only affects local `uv`
+# resolution. Remove it (or it is simply ignored) when building from a wheel.
+[tool.uv.sources]
+standard-asr = { path = "../standard_asr", editable = true }
+
+[build-system]
+requires = ["uv-build>=0.9,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = "src"
+module-name = "standard_asr_live"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.1",
+    "pytest-cov>=7.0.0",
+    "pytest-asyncio>=0.24.0",
+    "ruff>=0.6",
+]
+
+[tool.pytest.ini_options]
+addopts = [
+    "-q",
+    "--cov=standard_asr_live",
+    "--cov-branch",
+    "--cov-report=term-missing:skip-covered",
+]
+testpaths = ["tests"]
+# The scripted test-double engine is an installable sub-package, not a test
+# module; don't let pytest recurse into it (its src/ layout would shadow imports).
+norecursedirs = ["tests/scripted_engine"]
+asyncio_mode = "auto"
+filterwarnings = ["error"]
+
+[tool.coverage.run]
+branch = true
+source = ["standard_asr_live"]
+
+[tool.coverage.report]
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "W", "NPY201"]

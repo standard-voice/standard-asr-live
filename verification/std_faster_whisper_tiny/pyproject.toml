@@ -1,0 +1,22 @@
+[project]
+name = "std-faster-whisper-tiny"
+version = "0.0.1"
+description = "A faster-whisper/tiny preset plugin for fast local verification of standard-asr-live."
+readme = "../../README.md"
+requires-python = ">=3.10"
+dependencies = ["std-faster-whisper", "standard-asr>=0.1.0"]
+
+[tool.uv.sources]
+standard-asr = { path = "../../../standard_asr", editable = true }
+std-faster-whisper = { path = "../../../standard_asr/cookbook/std_faster_whisper", editable = true }
+
+[project.entry-points."standard_asr.models"]
+"faster-whisper/tiny" = "std_faster_whisper_tiny:create"
+
+[build-system]
+requires = ["uv-build>=0.9,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = "src"
+module-name = "std_faster_whisper_tiny"

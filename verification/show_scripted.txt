@@ -1,0 +1,106 @@
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ scripted/demo                                                                │
+╰──────────────────────────────────────────────────────────────────────────────╯
+               Properties                
+┌───────────────────────┬───────────────┐
+│             engine_id │ scripted      │
+│            model_name │ demo          │
+│      protocol_version │ 1.0.0         │
+│        accepted_input │ array         │
+│    native_sample_rate │ 16000         │
+│ accepted_sample_rates │ [16000]       │
+│  selectable_languages │ en, auto      │
+│        wire_encodings │ ['pcm_s16le'] │
+└───────────────────────┴───────────────┘
+Capabilities (canonical JSON):
+{
+  "batch": null,
+  "streaming": {
+    "language": {
+      "runtime_override": {
+        "supported": true
+      },
+      "candidate_languages": {
+        "supported": false,
+        "constraints": null
+      },
+      "supported": true
+    },
+    "word_timestamps": {
+      "supported": false,
+      "granularities": []
+    },
+    "guidance": {
+      "prompt": {
+        "supported": false,
+        "constraints": {
+          "max_tokens": null
+        }
+      },
+      "phrase_hints": {
+        "supported": false,
+        "constraints": {
+          "max_terms": null,
+          "max_chars_per_term": null,
+          "max_words_per_term": null
+        }
+      },
+      "mutable_mid_stream": {
+        "supported": false
+      },
+      "supported": true
+    },
+    "emits_partials": {
+      "supported": true
+    },
+    "re_segments": {
+      "supported": true
+    },
+    "word_stability": {
+      "supported": true
+    },
+    "reconnect": {
+      "mode": "unsupported",
+      "supported": false
+    },
+    "finality_level": {
+      "mode": "closed",
+      "supported": true
+    },
+    "timestamps": {
+      "mode": "none",
+      "supported": false
+    },
+    "supported": true
+  },
+  "streaming_input": {
+    "supported": true
+  },
+  "streaming_output": {
+    "supported": true
+  },
+  "self_resamples": {
+    "supported": false
+  }
+}
+                                  Init config                                   
+┏━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ field                 ┃ type    ┃ default  ┃ secret ┃ description            ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ engine                │ string  │ scripted │        │                        │
+│ strict                │ boolean │ True     │        │ Unsupported-parameter  │
+│                       │         │          │        │ policy: True=strict,   │
+│                       │         │          │        │ False=best_effort.     │
+│ allow_private_urls    │ boolean │ False    │        │ Opt-in to relax the R5 │
+│                       │         │          │        │ SSRF policy so an      │
+│                       │         │          │        │ AudioUrl may target a  │
+│                       │         │          │        │ private/loopback/link… │
+│                       │         │          │        │ address (HTTPS is      │
+│                       │         │          │        │ still required). False │
+│                       │         │          │        │ by default; set True   │
+│                       │         │          │        │ only for a trusted     │
+│                       │         │          │        │ internal endpoint.     │
+│ default_language      │ string  │ en       │        │                        │
+│ default_candidate_la… │ array   │ —        │        │ Default candidate      │
+│                       │         │          │        │ languages.             │
+└───────────────────────┴─────────┴──────────┴────────┴────────────────────────┘
