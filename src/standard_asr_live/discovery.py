@@ -16,12 +16,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from standard_asr import (
-    BaseProperties,
-    DeclaredCapabilities,
     ModelRegistry,
     ModelSpec,
     discover_models,
 )
+from standard_asr.engine import BaseProperties, DeclaredCapabilities
 
 
 @dataclass(frozen=True, slots=True)

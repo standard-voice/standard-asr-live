@@ -11,16 +11,13 @@ shapes) so each path is exercised deterministically without real models.
 
 from __future__ import annotations
 
+import logging
+import threading
 import wave
 from pathlib import Path
 
 import pytest
 from standard_asr import (
-    BaseConfig,
-    BaseProperties,
-    EngineBase,
-    InputKind,
-    PreparedAudio,
     RuntimeParams,
     Segment,
     TranscriptionResult,
@@ -29,10 +26,54 @@ from standard_asr.capabilities import (
     BatchCapabilities,
     DeclaredCapabilities,
 )
+from standard_asr.engine import (
+    BaseConfig,
+    BaseProperties,
+    EngineBase,
+    InputKind,
+    PreparedAudio,
+)
 
+import standard_asr_live.driver as driver_mod
 from standard_asr_live.audio_io import ChunkPlan
-from standard_asr_live.driver import DriveConfig, Mode, Source, drive, select_mode
+from standard_asr_live.driver import DriveConfig, DriveSession, Mode, Source, drive, select_mode
 from standard_asr_live.errors import MicrophoneUnsupportedError
+
+
+# --------------------------------------------------------------------------- #
+# MIC-1 async bridge: capture must run off the event loop and stop cleanly.
+# --------------------------------------------------------------------------- #
+async def test_aiter_chunk_source_yields_all_chunks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The async bridge relays every chunk from the (blocking) sync source."""
+
+    def _gen(_cfg: object, _stop: threading.Event):
+        for i in range(3):
+            yield bytes([i, i])
+
+    monkeypatch.setattr(driver_mod, "_chunk_source", _gen)
+    stop = threading.Event()
+    chunks = [c async for c in driver_mod._aiter_chunk_source(object(), stop)]
+    assert chunks == [b"\x00\x00", b"\x01\x01", b"\x02\x02"]
+
+
+async def test_aiter_chunk_source_sets_stop_on_close(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Closing the bridge sets the stop event so a live (mic-like) source ends.
+
+    Regression guard: the bridge must NOT close the underlying generator from the
+    loop thread (it may be mid-read on the executor thread -> "generator already
+    executing"); it signals ``stop`` so the source exits and releases its stream.
+    """
+
+    def _gen(_cfg: object, stop: threading.Event):
+        while not stop.is_set():
+            yield b"\x00\x00"
+
+    monkeypatch.setattr(driver_mod, "_chunk_source", _gen)
+    stop = threading.Event()
+    agen = driver_mod._aiter_chunk_source(object(), stop)
+    assert await agen.__anext__() == b"\x00\x00"
+    await agen.aclose()
+    assert stop.is_set()
 
 
 class _BatchProps(BaseProperties):
@@ -186,3 +227,74 @@ def test_batch_driver_no_segments_emits_whole_text(tmp_path: Path) -> None:
     finals = [e for e in events if e.type == "final"]
     assert len(finals) == 1
     assert finals[0].text == "just one line"
+
+
+# --------------------------------------------------------------------------- #
+# DriveSession.request_stop / close / _join_worker
+# --------------------------------------------------------------------------- #
+def test_drive_session_request_stop_sets_event_without_closing() -> None:
+    """request_stop() sets the capture stop event but does NOT close the stream."""
+    stop = threading.Event()
+    closed: list[bool] = []
+
+    def gen():
+        try:
+            yield "e1"
+        finally:
+            closed.append(True)
+
+    g = gen()
+    next(g)  # start the generator (now suspended at the yield)
+    session = DriveSession(
+        mode=Mode.INCREMENTAL, events=g, _result_holder=[], _diag_holder=[], _stop=stop
+    )
+    session.request_stop()
+    assert stop.is_set()
+    assert closed == []  # request_stop must NOT close the generator
+    g.close()
+
+
+def test_drive_session_request_stop_is_noop_without_stop() -> None:
+    """request_stop() on a non-incremental session (no _stop) is a safe no-op."""
+    session = DriveSession(mode=Mode.BATCH, events=iter([]), _result_holder=[], _diag_holder=[])
+    session.request_stop()  # must not raise
+
+
+def test_drive_session_close_is_idempotent() -> None:
+    """close() closes the generator once and is safe to call again."""
+    closed: list[bool] = []
+
+    def gen():
+        try:
+            yield "e1"
+        finally:
+            closed.append(True)
+
+    g = gen()
+    next(g)
+    session = DriveSession(
+        mode=Mode.INCREMENTAL, events=g, _result_holder=[], _diag_holder=[], _stop=threading.Event()
+    )
+    session.close()
+    session.close()  # idempotent: must not raise
+    assert closed == [True]  # generator cleanup ran exactly once
+
+
+def test_join_worker_warns_when_thread_stays_alive(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A worker still alive after the join timeout is surfaced as a WARNING, never silent."""
+    monkeypatch.setattr(driver_mod, "_WORKER_JOIN_TIMEOUT", 0.01)
+
+    class _StuckThread:
+        name = "stuck-worker"
+
+        def join(self, timeout: float | None = None) -> None:
+            return
+
+        def is_alive(self) -> bool:
+            return True
+
+    with caplog.at_level(logging.WARNING, logger="standard_asr_live.driver"):
+        driver_mod._join_worker(_StuckThread())
+    assert any("did not stop" in r.message for r in caplog.records)

@@ -15,6 +15,8 @@ from pathlib import Path
 
 from standard_asr import TranscriptionResult, to_srt, to_vtt
 
+from .errors import LiveAppError
+
 
 @dataclass(frozen=True, slots=True)
 class ExportResult:
@@ -51,16 +53,23 @@ def export_result(
 
     Returns:
         An :class:`ExportResult` naming the three written files.
+
+    Raises:
+        LiveAppError: If the directory cannot be created or a file cannot be
+            written (e.g. a bad path or insufficient permissions).
     """
     directory = Path(out_dir)
-    directory.mkdir(parents=True, exist_ok=True)
     txt_path = directory / f"{stem}.txt"
     srt_path = directory / f"{stem}.srt"
     vtt_path = directory / f"{stem}.vtt"
-    # Plain text ends with a trailing newline so the file is POSIX-clean.
-    txt_path.write_text(result.text + ("\n" if not result.text.endswith("\n") else ""), "utf-8")
-    srt_path.write_text(to_srt(result), "utf-8")
-    vtt_path.write_text(to_vtt(result), "utf-8")
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        # Plain text ends with a trailing newline so the file is POSIX-clean.
+        txt_path.write_text(result.text + ("\n" if not result.text.endswith("\n") else ""), "utf-8")
+        srt_path.write_text(to_srt(result), "utf-8")
+        vtt_path.write_text(to_vtt(result), "utf-8")
+    except OSError as exc:
+        raise LiveAppError(f"Could not export to {out_dir!r}: {exc}.") from exc
     return ExportResult(txt=txt_path, srt=srt_path, vtt=vtt_path)
 
 

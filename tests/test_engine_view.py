@@ -13,7 +13,7 @@ involved, so the tests are deterministic and fast.
 from __future__ import annotations
 
 from standard_asr import TranscriptionEvent
-from standard_asr import reduce_event as protocol_reduce
+from standard_asr.streaming import reduce_event as protocol_reduce
 
 from standard_asr_live.engine_view import LiveTranscript
 

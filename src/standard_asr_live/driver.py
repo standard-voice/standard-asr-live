@@ -24,9 +24,12 @@ reducer and renders -- so the UI code is identical across all three modes.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import queue
 import threading
-from collections.abc import Iterable, Iterator
+from collections.abc import AsyncIterator, Iterable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING
@@ -45,6 +48,32 @@ from .errors import MicrophoneUnsupportedError
 
 if TYPE_CHECKING:
     from standard_asr import StandardASR, TranscriptionResult
+
+_log = logging.getLogger("standard_asr_live.driver")
+
+#: How long to wait for a background session thread to stop before abandoning it.
+_WORKER_JOIN_TIMEOUT = 10.0
+
+
+def _join_worker(worker: threading.Thread) -> None:
+    """Join the background session thread, warning if it does not stop in time.
+
+    A clean shutdown joins promptly; if the thread is still alive after the
+    timeout (e.g. an engine wedged in a blocking call) we abandon the daemon
+    thread but warn, so a subsequent empty result is explained rather than
+    silent.
+
+    Args:
+        worker: The background session thread.
+    """
+    worker.join(timeout=_WORKER_JOIN_TIMEOUT)
+    if worker.is_alive():
+        _log.warning(
+            "session worker %r did not stop within %.0fs; abandoning it -- the final "
+            "result/diagnostics may be missing or incomplete.",
+            worker.name,
+            _WORKER_JOIN_TIMEOUT,
+        )
 
 
 class Mode(str, Enum):
@@ -131,6 +160,7 @@ class DriveSession:
     events: Iterator[TranscriptionEvent]
     _result_holder: list[TranscriptionResult]
     _diag_holder: list[list]
+    _stop: threading.Event | None = None
 
     def diagnostics(self) -> list:
         """Return the session diagnostics gathered after iteration.
@@ -149,6 +179,37 @@ class DriveSession:
             session produced none.
         """
         return self._result_holder[0] if self._result_holder else None
+
+    def request_stop(self) -> None:
+        """Signal the source to stop feeding without tearing down the stream.
+
+        Unlike :meth:`close`, this does NOT close the event iterator: it sets the
+        capture stop event so a live (microphone) source ends, which lets the
+        engine run its end-of-stream finalization and emit its terminal
+        ``final`` / ``done`` events to a still-consuming caller. That is what makes
+        a Ctrl-C stop *finalize* the on-screen transcript (grey -> white) instead
+        of discarding the in-flight finalization. Idempotent; a no-op for a
+        non-incremental session (which has no capture stop event).
+        """
+        if self._stop is not None:
+            self._stop.set()
+
+    def close(self) -> None:
+        """Stop the drive and release resources; idempotent.
+
+        Closes the underlying event generator. On the incremental streaming path
+        that runs the generator's cleanup -- set the capture stop event, join the
+        background session thread, and recover the final result / diagnostics the
+        worker produced -- so this is the way to end an in-progress mic session
+        (e.g. the user pressing Ctrl-C) while still recovering the partial
+        transcript. Safe to call after normal exhaustion (a no-op). For the
+        whole-input / batch paths there is no stop event to join on, so an early
+        close simply abandons the background worker (a daemon thread reaped at
+        process exit); the on-screen transcript already rendered is unaffected.
+        """
+        close = getattr(self.events, "close", None)
+        if close is not None:
+            close()
 
 
 def drive(engine: StandardASR, cfg: DriveConfig) -> DriveSession:
@@ -202,6 +263,48 @@ def _chunk_source(cfg: DriveConfig, stop: threading.Event) -> Iterable[bytes]:
         return iter_mic_chunks(cfg.plan, device=cfg.device, stop=stop)
     assert cfg.file_path is not None
     return iter_file_chunks(cfg.file_path, cfg.plan)
+
+
+async def _aiter_chunk_source(cfg: DriveConfig, stop: threading.Event) -> AsyncIterator[bytes]:
+    """Async-adapt the (blocking) chunk source so it never blocks the event loop.
+
+    The sync chunk sources block: the microphone does a blocking PortAudio
+    ``read()`` and file pacing does ``time.sleep()``. Draining them directly on
+    the protocol's asyncio loop (``session.feed`` does ``for chunk in source``)
+    would freeze the loop for up to one chunk window per item, stalling the
+    session's in-loop deadlines and delaying clean cancellation. We therefore
+    pull each chunk on a dedicated single-thread executor and ``await`` it, so
+    the blocking I/O happens off the loop and the loop stays responsive. The
+    underlying generator is closed on exit so its ``with stream`` (mic) / pacing
+    cleanup runs.
+
+    Args:
+        cfg: The drive configuration.
+        stop: Stop event for microphone capture.
+
+    Yields:
+        Mono ``pcm_s16le`` byte chunks, off-loop.
+    """
+    sync_iter = iter(_chunk_source(cfg, stop))
+    loop = asyncio.get_running_loop()
+    # A single worker keeps all PortAudio reads on one consistent thread.
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sasr-live-capture")
+    _sentinel = object()
+    try:
+        while True:
+            chunk = await loop.run_in_executor(executor, lambda: next(sync_iter, _sentinel))
+            if chunk is _sentinel:
+                break
+            yield chunk  # type: ignore[misc]
+    finally:
+        # Signal the capture to stop rather than closing the generator from this
+        # thread: on cancellation the executor thread may still be inside a
+        # blocking read, and closing a generator that is executing on another
+        # thread raises "generator already executing". The mic loop exits on
+        # `stop` and closes its own stream; the in-flight read then completes and
+        # the capture thread exits on its own.
+        stop.set()
+        executor.shutdown(wait=False)
 
 
 def resolve_audio_format(engine: StandardASR, sample_rate: int) -> AudioFormat:
@@ -265,6 +368,7 @@ def _drive_incremental(engine: StandardASR, cfg: DriveConfig) -> DriveSession:
         events=events,
         _result_holder=result_holder,
         _diag_holder=diag_holder,
+        _stop=stop,
     )
 
 
@@ -352,7 +456,7 @@ def _iter_async_incremental(
         if cfg.strict_lifecycle:
             _enable_strict_lifecycle(session)
         async with session:
-            session.feed(_chunk_source(cfg, stop))
+            session.feed(_aiter_chunk_source(cfg, stop))
             async for event in session:
                 event_q.put(event)
             result_holder.append(session.result())
@@ -376,7 +480,7 @@ def _iter_async_incremental(
             yield item
     finally:
         stop.set()
-        worker.join(timeout=10.0)
+        _join_worker(worker)
     if error_holder:
         raise error_holder[0]
 
@@ -429,7 +533,7 @@ def _drive_whole_input(engine: StandardASR, cfg: DriveConfig) -> DriveSession:
             if item is sentinel:
                 break
             yield item
-        worker.join(timeout=10.0)
+        _join_worker(worker)
         if error_holder:
             raise error_holder[0]
 

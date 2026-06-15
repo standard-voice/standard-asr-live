@@ -14,6 +14,7 @@ from standard_asr_live.config_form import (
     parse_overrides,
     redacted_config,
 )
+from standard_asr_live.errors import LiveAppError
 
 # A schema fragment mirroring the standard layer's secret_field markers.
 _SCHEMA = {
@@ -77,15 +78,22 @@ def test_coercion_rejects_bad_boolean() -> None:
 def test_parse_overrides_unknown_field_errors() -> None:
     """An unknown --set key fails with a helpful message."""
     fields = fields_from_schema(_SCHEMA)
-    with pytest.raises(ValueError, match="Unknown config field"):
+    with pytest.raises(LiveAppError, match="Unknown config field"):
         parse_overrides(fields, ["nope=1"])
 
 
 def test_parse_overrides_requires_equals() -> None:
     """A --set without '=' fails loudly."""
     fields = fields_from_schema(_SCHEMA)
-    with pytest.raises(ValueError, match="KEY=VALUE"):
+    with pytest.raises(LiveAppError, match="KEY=VALUE"):
         parse_overrides(fields, ["justakey"])
+
+
+def test_parse_overrides_bad_value_is_wrapped() -> None:
+    """A value that fails coercion is surfaced as a clean --set error, not a ValueError."""
+    fields = fields_from_schema(_SCHEMA)
+    with pytest.raises(LiveAppError, match="--set strict"):
+        parse_overrides(fields, ["strict=maybe"])
 
 
 def test_redacted_config_masks_secret_values() -> None:

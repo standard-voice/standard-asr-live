@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from standard_asr import BaseProperties
+from standard_asr.engine import BaseProperties
 from std_faster_whisper.std_asr_faster_whisper import (
     FasterWhisperASR,
     FasterWhisperProperties,

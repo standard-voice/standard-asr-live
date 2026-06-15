@@ -20,6 +20,7 @@ the reducer never need to know which one is feeding them.
 
 from __future__ import annotations
 
+import logging
 import shutil
 import subprocess
 import time
@@ -27,6 +28,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 
 from .errors import LiveAppError
+
+_log = logging.getLogger("standard_asr_live.audio")
 
 #: Canonical wire encoding for the streaming session (spec §AI: 16-bit signed
 #: little-endian PCM is the canonical wire encoding ``pcm_s16le``).
@@ -231,11 +234,38 @@ def iter_mic_chunks(
             f"Could not open the microphone input stream: {exc}. "
             "Check that a microphone is connected and the terminal has mic permission."
         ) from exc
-    with stream:
-        while stop is None or not stop.is_set():  # type: ignore[union-attr]
-            data, _overflowed = stream.read(blocksize)
-            # RawInputStream returns a buffer of raw bytes already in pcm_s16le.
-            yield bytes(data)
+    overflows = 0
+    try:
+        with stream:
+            while stop is None or not stop.is_set():  # type: ignore[union-attr]
+                try:
+                    data, overflowed = stream.read(blocksize)
+                except Exception as exc:  # noqa: BLE001 - normalized to a user-facing error
+                    # A mid-stream PortAudio failure (device unplugged, sample-rate
+                    # change, OS revoked the device) must surface as an actionable
+                    # message, never a raw traceback or silent stop.
+                    raise LiveAppError(
+                        f"Microphone capture failed mid-stream: {exc}. The device may "
+                        "have been disconnected or its OS permission revoked; reconnect "
+                        "it (or pick another with --list-devices) and try again."
+                    ) from exc
+                if overflowed:
+                    # Dropped audio is never silent: surfacing it is required so the
+                    # operator knows the transcript may be incomplete (AGENTS.md:
+                    # silent wrong results are the cardinal sin).
+                    overflows += 1
+                    _log.warning(
+                        "microphone input overflow: capture could not keep up and audio "
+                        "samples were dropped (the transcript may be incomplete)."
+                    )
+                # RawInputStream returns a buffer of raw bytes already in pcm_s16le.
+                yield bytes(data)
+    finally:
+        if overflows:
+            _log.warning(
+                "microphone capture ended with %d input overflow(s); some audio was dropped.",
+                overflows,
+            )
 
 
 def _import_sounddevice() -> object:

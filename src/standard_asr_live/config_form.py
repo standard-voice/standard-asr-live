@@ -30,6 +30,8 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+from .errors import LiveAppError
+
 #: Config fields the form never auto-prompts for: the entry-point-derived engine
 #: discriminator, and the two security/policy switches the standard layer
 #: deliberately excludes from environment fallback (so they cannot be silently
@@ -196,20 +198,24 @@ def parse_overrides(
         A mapping of field name to coerced value.
 
     Raises:
-        ValueError: On a malformed override (no ``=``), an unknown field, or a
-            value that cannot be coerced.
+        LiveAppError: On a malformed override (no ``=``), an unknown field, or a
+            value that cannot be coerced -- a user-input error surfaced as a
+            clean message, never a raw ``ValueError`` traceback.
     """
     by_name = {f.name: f for f in fields}
     out: dict[str, Any] = {}
     for item in overrides:
         if "=" not in item:
-            raise ValueError(f"--set expects KEY=VALUE, got {item!r}.")
+            raise LiveAppError(f"--set expects KEY=VALUE, got {item!r}.")
         key, _, value = item.partition("=")
         key = key.strip()
         if key not in by_name:
             known = ", ".join(sorted(by_name)) or "<none>"
-            raise ValueError(f"Unknown config field {key!r}. Known fields: {known}.")
-        out[key] = coerce_value(by_name[key], value)
+            raise LiveAppError(f"Unknown config field {key!r}. Known fields: {known}.")
+        try:
+            out[key] = coerce_value(by_name[key], value)
+        except ValueError as exc:
+            raise LiveAppError(f"--set {key}: {exc}") from exc
     return out
 
 

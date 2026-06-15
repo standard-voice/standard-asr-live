@@ -7,8 +7,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from standard_asr import Segment, TranscriptionResult
 
+from standard_asr_live.errors import LiveAppError
 from standard_asr_live.export import export_result
 
 
@@ -69,3 +71,11 @@ def test_custom_stem(tmp_path: Path) -> None:
     assert out.txt.name == "meeting.txt"
     assert out.srt.name == "meeting.srt"
     assert out.vtt.name == "meeting.vtt"
+
+
+def test_export_oserror_is_wrapped(tmp_path: Path) -> None:
+    """A failure to create/write the export directory surfaces as a clean LiveAppError."""
+    blocker = tmp_path / "blocker"
+    blocker.write_text("x")  # a FILE; using it as a parent dir makes mkdir fail
+    with pytest.raises(LiveAppError, match="Could not export"):
+        export_result(_result(), blocker / "out")

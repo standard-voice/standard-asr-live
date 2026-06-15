@@ -11,14 +11,49 @@ compliant streaming engine, including the supersede correction and export.
 
 from __future__ import annotations
 
+import argparse
+import signal
+import sys
+import types
 from pathlib import Path
 
 import pytest
 from standard_asr import discover_models
 
-from standard_asr_live.cli import main
+from standard_asr_live.cli import (
+    _consume_with_graceful_stop,
+    _open_events_log,
+    _resolve_source,
+    _validate_device,
+    _with_default_command,
+    main,
+)
+from standard_asr_live.driver import Source
+from standard_asr_live.errors import LiveAppError
 
 _SCRIPTED = "scripted/demo"
+
+
+def _run_args(**overrides: object) -> argparse.Namespace:
+    """Build a minimal ``run`` args namespace for source/device unit tests.
+
+    Args:
+        **overrides: Fields to set (e.g. ``mic=True``, ``file="x.wav"``).
+
+    Returns:
+        An ``argparse.Namespace`` with mic/file/device defaults applied.
+    """
+    ns = argparse.Namespace(mic=False, file=None, device=None, audio=None)
+    for key, value in overrides.items():
+        setattr(ns, key, value)
+    return ns
+
+
+def _fake_sounddevice(devices: list[dict[str, object]]) -> types.ModuleType:
+    """Build a minimal fake ``sounddevice`` exposing ``query_devices``."""
+    mod = types.ModuleType("sounddevice")
+    mod.query_devices = lambda: devices  # type: ignore[attr-defined]
+    return mod
 
 
 def _has_scripted() -> bool:
@@ -139,3 +174,202 @@ def _write_silence_wav(path: Path) -> Path:
         w.setframerate(16000)
         w.writeframes(b"\x00\x00" * 16000)  # 1 s of silence
     return path
+
+
+# --------------------------------------------------------------------------- #
+# Input validation (actionable errors, no tracebacks)
+# --------------------------------------------------------------------------- #
+def test_resolve_source_defaults_to_mic() -> None:
+    """With neither a file nor --mic, the source defaults to the microphone."""
+    source, path = _resolve_source(_run_args())
+    assert source is Source.MIC
+    assert path is None
+
+
+def test_resolve_source_positional_file(tmp_path: Path) -> None:
+    """A positional audio path selects file input."""
+    audio = tmp_path / "a.wav"
+    audio.write_bytes(b"\x00")
+    source, path = _resolve_source(_run_args(audio=str(audio)))
+    assert source is Source.FILE
+    assert path == str(audio)
+
+
+def test_resolve_source_mic_and_file_conflict(tmp_path: Path) -> None:
+    """Passing both --mic and a file is a clear conflict, not a silent pick."""
+    audio = tmp_path / "a.wav"
+    audio.write_bytes(b"\x00")
+    with pytest.raises(LiveAppError, match="[Bb]oth"):
+        _resolve_source(_run_args(mic=True, audio=str(audio)))
+
+
+def test_resolve_source_missing_file_errors() -> None:
+    """A nonexistent --file path is reported clearly."""
+    with pytest.raises(LiveAppError, match="not found"):
+        _resolve_source(_run_args(file="/no/such/audio.wav"))
+
+
+def test_resolve_source_mic() -> None:
+    """--mic resolves to the microphone source with no file path."""
+    source, path = _resolve_source(_run_args(mic=True))
+    assert source is Source.MIC
+    assert path is None
+
+
+def test_validate_device_rejects_unknown_index(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An out-of-range --device index lists the valid devices instead of a vague error."""
+    monkeypatch.setitem(
+        sys.modules, "sounddevice", _fake_sounddevice([{"name": "Mic", "max_input_channels": 1}])
+    )
+    with pytest.raises(LiveAppError, match="Invalid --device"):
+        _validate_device(999)
+    _validate_device(0)  # a valid index does not raise
+
+
+def test_run_unknown_set_field_exits_clean(capsys: pytest.CaptureFixture[str]) -> None:
+    """A bad --set key exits 1 with a friendly message, never a traceback."""
+    if not _has_scripted():
+        pytest.skip("scripted engine not installed")
+    code = main(["run", _SCRIPTED, "--set", "nope=1", "--plain", "--no-prompt"])
+    assert code == 1
+    assert "Unknown config field" in capsys.readouterr().out
+
+
+def test_with_default_command_injects_run() -> None:
+    """A bare invocation or one starting with a model/flag is treated as `run`."""
+    assert _with_default_command([]) == ["run"]
+    assert _with_default_command(["faster-whisper/tiny"]) == ["run", "faster-whisper/tiny"]
+    assert _with_default_command(["faster-whisper/tiny", "a.wav"]) == [
+        "run",
+        "faster-whisper/tiny",
+        "a.wav",
+    ]
+    assert _with_default_command(["--mic"]) == ["run", "--mic"]
+    # Explicit subcommands and top-level flags are left untouched.
+    assert _with_default_command(["models"]) == ["models"]
+    assert _with_default_command(["run", "x"]) == ["run", "x"]
+    assert _with_default_command(["--version"]) == ["--version"]
+    assert _with_default_command(["-h"]) == ["-h"]
+    assert _with_default_command(["--help"]) == ["--help"]
+
+
+# --------------------------------------------------------------------------- #
+# Ctrl-C handling (_consume_with_graceful_stop) + events-log error wrapping
+# --------------------------------------------------------------------------- #
+class _FakeSession:
+    """Minimal DriveSession stand-in for _consume_with_graceful_stop tests."""
+
+    def __init__(self, events: object) -> None:
+        self.events = events
+        self.stop_calls = 0
+        self.closed = 0
+
+    def request_stop(self) -> None:
+        self.stop_calls += 1
+
+    def close(self) -> None:
+        self.closed += 1
+
+
+def test_consume_non_graceful_completes_without_interrupt() -> None:
+    """A finite source that ends on its own returns interrupted=False."""
+    fake = _FakeSession(iter(["a", "b", "c"]))
+    seen: list = []
+    interrupted = _consume_with_graceful_stop(fake, seen.append, graceful=False)
+    assert interrupted is False
+    assert seen == ["a", "b", "c"]
+    assert fake.stop_calls == 0
+
+
+def test_consume_non_graceful_aborts_on_first_ctrl_c() -> None:
+    """A finite (file/batch) source aborts on the FIRST Ctrl-C -- not swallowed."""
+
+    def gen():
+        yield "a"
+        raise KeyboardInterrupt
+
+    fake = _FakeSession(gen())
+    seen: list = []
+    interrupted = _consume_with_graceful_stop(fake, seen.append, graceful=False)
+    assert interrupted is True
+    assert seen == ["a"]  # aborted immediately; no further draining
+    assert fake.stop_calls == 1
+
+
+def test_consume_graceful_drains_after_first_ctrl_c(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Mic graceful stop: the first Ctrl-C stops capture but KEEPS draining finals."""
+    captured: dict = {}
+
+    def fake_signal(_signum, handler):
+        captured["handler"] = handler
+        return signal.SIG_DFL  # a non-None "previous" handler to restore
+
+    monkeypatch.setattr(signal, "signal", fake_signal)
+
+    def gen():
+        yield "partial"
+        captured["handler"](signal.SIGINT, None)  # user presses Ctrl-C mid-stream
+        yield "final"  # engine end-of-stream finalization still flows through
+        yield "done"
+
+    fake = _FakeSession(gen())
+    seen: list = []
+    interrupted = _consume_with_graceful_stop(fake, seen.append, graceful=True)
+    assert interrupted is True
+    assert seen == ["partial", "final", "done"]  # drained to completion (grey->white)
+    assert fake.stop_calls == 1
+
+
+def test_consume_graceful_second_ctrl_c_hard_aborts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A second Ctrl-C stops the drain immediately."""
+    captured: dict = {}
+
+    def fake_signal(_signum, handler):
+        captured["handler"] = handler
+        return signal.SIG_DFL
+
+    monkeypatch.setattr(signal, "signal", fake_signal)
+
+    def gen():
+        yield "partial"
+        captured["handler"](signal.SIGINT, None)  # first: stop + keep draining
+        captured["handler"](signal.SIGINT, None)  # second: raise -> hard abort
+        yield "never"
+
+    fake = _FakeSession(gen())
+    seen: list = []
+    interrupted = _consume_with_graceful_stop(fake, seen.append, graceful=True)
+    assert interrupted is True
+    assert seen == ["partial"]  # stopped draining after the second Ctrl-C
+    assert fake.stop_calls >= 1
+
+
+def test_consume_graceful_falls_back_when_handler_uninstallable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Off the main thread (signal.signal raises), a KeyboardInterrupt still aborts cleanly."""
+
+    def boom(_signum, _handler):
+        raise ValueError("signal only works in main thread")
+
+    monkeypatch.setattr(signal, "signal", boom)
+
+    def gen():
+        yield "a"
+        raise KeyboardInterrupt
+
+    fake = _FakeSession(gen())
+    seen: list = []
+    interrupted = _consume_with_graceful_stop(fake, seen.append, graceful=True)
+    assert interrupted is True
+    assert seen == ["a"]
+    assert fake.stop_calls == 1
+
+
+def test_open_events_log_oserror_is_wrapped(tmp_path: Path) -> None:
+    """An unopenable --json-events path surfaces as a clean LiveAppError."""
+    blocker = tmp_path / "blocker"
+    blocker.write_text("x")  # a FILE, so using it as a parent directory fails
+    args = argparse.Namespace(json_events=str(blocker / "events.jsonl"))
+    with pytest.raises(LiveAppError, match="--json-events"):
+        _open_events_log(args)

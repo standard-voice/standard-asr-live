@@ -48,9 +48,11 @@ tiny, and unit-tested.
   and the init-config schema.
 - **Settings from the schema.** The config form is generated from the engine's
   JSON Schema; **secret fields are prompted with no echo and never logged**.
-- **Mic or file input.** Live microphone capture (`--mic`) or stream an audio
-  file in real-time-like chunks (`--file`) — the file path exercises the full
-  live UI without a physical mic.
+- **Mic-first, zero-config.** With no audio file the **microphone is the
+  default**, so `standard-asr-live <model>` just works; pass a file path
+  (positional, or `--file`) to stream a file in real-time-like chunks instead —
+  exercising the full live UI without a physical mic. Ctrl-C stops mic capture
+  and finalizes the transcript.
 - **The live transcript view.** `partial` text is dim/italic; it promotes to a
   solid `final`; `supersede` removes the retired segments and re-renders the
   replacements live; the `stable_until` frozen prefix is drawn distinctly; a
@@ -77,50 +79,65 @@ Requires Python 3.12 (pinned), `ffmpeg` on PATH, and `uv`.
 
 ```bash
 cd standard-asr-live
-uv python pin 3.12
-uv venv --python 3.12
-uv pip install -e .                                   # app + standard-asr
+uv sync                       # app + standard-asr + the scripted/demo test engine
 ```
 
-Then install at least one ASR engine plugin (the app discovers it automatically):
+`uv sync` resolves `standard-asr` (and the sibling engine plugins) from the
+co-located monorepo checkout via `[tool.uv.sources]`, and installs the
+`scripted/demo` streaming test engine, so you can see live corrections
+immediately with no model download.
+
+### Install real ASR engines
+
+Each engine is an optional extra; the app discovers it automatically once
+installed (it never imports an engine directly):
 
 ```bash
-# A real engine (faster-whisper, CPU-friendly with the tiny model):
-uv pip install -e ../standard_asr/cookbook/std_faster_whisper
-uv pip install -e verification/std_faster_whisper_tiny     # adds faster-whisper/tiny
-
-# A streaming engine to see live corrections (a protocol test double):
-uv pip install -e tests/scripted_engine                    # adds scripted/demo
+uv sync --extra faster-whisper   # faster-whisper/*  (CPU-friendly; tiny .. large-v3)
+uv sync --extra mlx-audio        # mlx-audio/*        (Apple-Silicon native; Qwen3-ASR, Whisper, Parakeet)
+uv sync --extra qwen3-asr        # qwen3-asr/*        (vLLM / DashScope client; needs a running backend)
+uv sync --all-extras             # all of the above at once
 ```
 
-> The published manifest pins `standard-asr` to its public git branch:
-> `uv add "standard-asr @ git+https://github.com/standard-voice/standard_asr.git@refactor/v0.1.0-redesign"`.
-> For local development this repo resolves it from the sibling monorepo checkout
-> via `[tool.uv.sources]`.
+Then confirm what's discoverable:
+
+```bash
+uv run standard-asr-live models
+```
+
+> The `[project]` manifest pins `standard-asr` and each engine plugin to their
+> public git sources for a publish-ready build; for local development this repo
+> resolves them from the sibling monorepo checkout via `[tool.uv.sources]`
+> (editable), so protocol edits are picked up immediately. Swap to git/PyPI pins
+> before publishing.
 
 ## Usage
 
 ```bash
-# List installed engines and their streaming capabilities
-uv run standard-asr-live models
+# Just run it: pick a model interactively, transcribe from the microphone
+uv run standard-asr-live
 
-# Inspect one engine in full
-uv run standard-asr-live show faster-whisper/tiny
+# A specific model, from the microphone (`run` is the default command)
+uv run standard-asr-live scripted/demo
 
-# Live transcription from a FILE (default demo audio if --file omitted)
-STANDARD_ASR_ALLOW_DOWNLOAD=1 uv run standard-asr-live run faster-whisper/tiny \
-  --file path/to/audio.m4a --language en --export ./out
+# Transcribe a FILE (the audio path is a positional argument)
+STANDARD_ASR_ALLOW_DOWNLOAD=1 uv run standard-asr-live faster-whisper/tiny \
+  path/to/audio.m4a --language en --export ./out
 
 # See partial -> final -> supersede corrections render LIVE (streaming engine)
-STD_SCRIPTED_STEP_DELAY=0.15 uv run standard-asr-live run scripted/demo \
-  --file verification/scripted_silence.wav
+STD_SCRIPTED_STEP_DELAY=0.15 uv run standard-asr-live scripted/demo \
+  verification/scripted_silence.wav
 
-# Live transcription from the MICROPHONE (needs a streaming_input engine + mic)
-uv run standard-asr-live run scripted/demo --mic
-uv run standard-asr-live run --list-devices          # discover input devices
+# List installed engines, or inspect one in full
+uv run standard-asr-live models
+uv run standard-asr-live show faster-whisper/tiny
+
+# Microphone helpers
+uv run standard-asr-live --list-devices              # discover input devices
+uv run standard-asr-live scripted/demo --mic         # force mic (it is the default)
 
 # Drive via the synchronous SyncSession bridge instead of async
-uv run standard-asr-live run scripted/demo --file audio.wav --sync
+uv run standard-asr-live scripted/demo audio.wav --sync
 
 # Environment / dependency diagnostics
 uv run standard-asr-live doctor
@@ -137,7 +154,7 @@ non-TTY / CI capture).
 Mic capture needs OS permission and an interactive terminal, so automated
 verification uses the file path (streamed in real-time-like chunks) to drive the
 full live UI. Mic mode is fully implemented: run
-`uv run standard-asr-live run <streaming-engine> --mic` (use `--list-devices` /
+`uv run standard-asr-live <streaming-engine> --mic` (use `--list-devices` /
 `--device N` to choose an input). The app **fails loudly** if the chosen engine
 does not declare `streaming_input`.
 
@@ -175,7 +192,7 @@ building this is in [`docs/STANDARD_ASR_FINDINGS.md`](docs/STANDARD_ASR_FINDINGS
 ## Tests
 
 ```bash
-uv run pytest          # 62 tests; the reducer is unit-tested with scripted streams
+uv run pytest          # 78 tests; the reducer is unit-tested with scripted streams
 uv run ruff check src tests
 ```
 

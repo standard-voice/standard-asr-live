@@ -13,15 +13,18 @@ keywords = ["asr", "speech-to-text", "streaming", "captions", "standard-asr", "t
 dependencies = [
     "standard-asr @ git+https://github.com/standard-voice/standard_asr.git@refactor/v0.1.0-redesign",
     "rich>=13.7",
-    "sounddevice>=0.4.6",   # microphone capture (live input)
-    "soundfile>=0.12.1",    # robust audio decode fallback alongside ffmpeg
-    "numpy>=1.26",
+    # Microphone capture. sounddevice wheels bundle PortAudio, so the live mic
+    # (this app's centerpiece) works out of the box; audio_io still imports it
+    # lazily so file mode keeps working if the backend cannot load at runtime.
+    "sounddevice>=0.4.6",
 ]
 
 [project.optional-dependencies]
 # Real-engine demos. Installing these is how an end user gets a working engine;
 # the app discovers them via entry points and never imports them.
 faster-whisper = ["std-faster-whisper"]
+mlx-audio = ["std-mlx-audio"]
+qwen3-asr = ["std-qwen3-asr"]
 
 [project.scripts]
 standard-asr-live = "standard_asr_live.cli:main"
@@ -33,6 +36,11 @@ standard-asr-live = "standard_asr_live.cli:main"
 # resolution. Remove it (or it is simply ignored) when building from a wheel.
 [tool.uv.sources]
 standard-asr = { path = "../standard_asr", editable = true }
+std-faster-whisper = { path = "../std-faster-whisper", editable = true }
+std-mlx-audio = { path = "../std-mlx-audio", editable = true }
+std-qwen3-asr = { path = "../std-qwen3-asr", editable = true }
+# The scripted test-double engine, discovered via entry points in the test suite.
+std-scripted-asr = { path = "tests/scripted_engine", editable = true }
 
 [build-system]
 requires = ["uv-build>=0.9,<0.12"]
@@ -48,6 +56,9 @@ dev = [
     "pytest-cov>=7.0.0",
     "pytest-asyncio>=0.24.0",
     "ruff>=0.6",
+    # The scripted test-double engine, so `uv sync` makes "scripted/demo"
+    # discoverable for the entry-point / driver / CLI integration tests.
+    "std-scripted-asr",
 ]
 
 [tool.pytest.ini_options]
