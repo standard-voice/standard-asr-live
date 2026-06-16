@@ -84,11 +84,11 @@ cd standard-asr-live
 uv sync                       # the app + the protocol + a built-in scripted/demo engine
 ```
 
-`uv sync` installs `standard-asr-live`, the `standard-asr` protocol (pulled from
-the public GitHub `main` branch — so a plain `uv sync` works **standalone**, no
-monorepo checkout needed), and a `scripted/demo` streaming test engine — so you
-can watch live corrections immediately, **with no model download and no real
-engine installed**. The app depends on **no** ASR engine.
+`uv sync` installs `standard-asr-live`, the `standard-asr` protocol (from PyPI —
+so a plain `uv sync` works **standalone**, no monorepo checkout needed), and a
+`scripted/demo` streaming test engine — so you can watch live corrections
+immediately, **with no model download and no real engine installed**. The app
+depends on **no** ASR engine.
 
 ### Add a real ASR engine — _any_ compliant plugin
 
