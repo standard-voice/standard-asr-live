@@ -238,10 +238,12 @@ def test_run_unknown_set_field_exits_clean(capsys: pytest.CaptureFixture[str]) -
 def test_with_default_command_injects_run() -> None:
     """A bare invocation or one starting with a model/flag is treated as `run`."""
     assert _with_default_command([]) == ["run"]
-    assert _with_default_command(["faster-whisper/tiny"]) == ["run", "faster-whisper/tiny"]
-    assert _with_default_command(["faster-whisper/tiny", "a.wav"]) == [
+    # Any non-subcommand token is treated as a model key (engine-agnostic — the app
+    # never special-cases a particular engine), so a generic placeholder is used.
+    assert _with_default_command(["some-engine/model"]) == ["run", "some-engine/model"]
+    assert _with_default_command(["some-engine/model", "a.wav"]) == [
         "run",
-        "faster-whisper/tiny",
+        "some-engine/model",
         "a.wav",
     ]
     assert _with_default_command(["--mic"]) == ["run", "--mic"]

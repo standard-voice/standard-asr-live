@@ -81,37 +81,38 @@ Requires Python 3.12 (pinned), `ffmpeg` on PATH, and `uv`.
 
 ```bash
 cd standard-asr-live
-uv sync                       # app + standard-asr + the scripted/demo test engine
+uv sync                       # the app + the protocol + a built-in scripted/demo engine
 ```
 
-`uv sync` resolves `standard-asr` (and the sibling engine plugins) from the
-co-located monorepo checkout via `[tool.uv.sources]`, and installs the
-`scripted/demo` streaming test engine, so you can see live corrections
-immediately with no model download.
+`uv sync` installs `standard-asr-live`, the `standard-asr` protocol, and a
+`scripted/demo` streaming test engine — so you can watch live corrections
+immediately, **with no model download and no real engine installed**. The app
+depends on **no** ASR engine; `[tool.uv.sources]` only resolves the protocol
+itself from the co-located monorepo checkout during development.
 
-### Install real ASR engines
+### Add a real ASR engine — _any_ compliant plugin
 
-Each engine is an optional extra; the app discovers it automatically once
-installed (it never imports an engine directly):
+The app never imports or bundles an engine. Install **any** Standard ASR-compliant
+plugin into the same environment and it appears automatically via entry-point
+discovery — no app config, no code change, no per-engine integration:
 
 ```bash
-uv sync --extra faster-whisper   # faster-whisper/*  (CPU-friendly; tiny .. large-v3)
-uv sync --extra mlx-audio        # mlx-audio/*        (Apple-Silicon native; Qwen3-ASR, Whisper, Parakeet)
-uv sync --extra qwen3-asr        # qwen3-asr/*        (vLLM / DashScope client; needs a running backend)
-uv sync --all-extras             # all of the above at once
+uv pip install git+https://github.com/standard-voice/std-mlx-audio       # Apple-Silicon (MLX): Qwen3-ASR, Whisper, Parakeet, +more
+uv pip install git+https://github.com/standard-voice/std-faster-whisper  # faster-whisper (CPU-friendly)
+uv pip install git+https://github.com/standard-voice/std-qwen3-asr       # Qwen3-ASR via a client backend
+# ...or ANY other compliant plugin — including one you wrote yourself.
 ```
 
-Then confirm what's discoverable:
+(Once these publish to PyPI, it's simply `uv pip install std-mlx-audio`.) Then
+list what's now discoverable — switching engines is a one-line model-key change,
+never an app change:
 
 ```bash
 uv run standard-asr-live models
 ```
 
-> The `[project]` manifest pins `standard-asr` and each engine plugin to their
-> public git sources for a publish-ready build; for local development this repo
-> resolves them from the sibling monorepo checkout via `[tool.uv.sources]`
-> (editable), so protocol edits are picked up immediately. Swap to git/PyPI pins
-> before publishing.
+This *is* the protocol's headline promise in action: **the application does not
+know, and does not need to know, which ASR engine it is talking to.**
 
 ## Usage
 
@@ -122,8 +123,8 @@ uv run standard-asr-live
 # A specific model, from the microphone (`run` is the default command)
 uv run standard-asr-live scripted/demo
 
-# Transcribe a FILE (the audio path is a positional argument)
-STANDARD_ASR_ALLOW_DOWNLOAD=1 uv run standard-asr-live faster-whisper/tiny \
+# Transcribe a FILE with any installed model (run `models` to get a <model-key>)
+STANDARD_ASR_ALLOW_DOWNLOAD=1 uv run standard-asr-live <model-key> \
   path/to/audio.m4a --language en --export ./out
 
 # See partial -> final -> supersede corrections render LIVE (streaming engine)
@@ -132,7 +133,7 @@ STD_SCRIPTED_STEP_DELAY=0.15 uv run standard-asr-live scripted/demo \
 
 # List installed engines, or inspect one in full
 uv run standard-asr-live models
-uv run standard-asr-live show faster-whisper/tiny
+uv run standard-asr-live show <model-key>
 
 # Microphone helpers
 uv run standard-asr-live --list-devices              # discover input devices
@@ -194,7 +195,7 @@ building this is in [`docs/STANDARD_ASR_FINDINGS.md`](docs/STANDARD_ASR_FINDINGS
 ## Tests
 
 ```bash
-uv run pytest          # 78 tests; the reducer is unit-tested with scripted streams
+uv run pytest          # the reducer is unit-tested with scripted streams
 uv run ruff check src tests
 ```
 

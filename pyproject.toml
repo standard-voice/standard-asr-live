@@ -19,26 +19,25 @@ dependencies = [
     "sounddevice>=0.4.6",
 ]
 
-[project.optional-dependencies]
-# Real-engine demos. Installing these is how an end user gets a working engine;
-# the app discovers them via entry points and never imports them.
-faster-whisper = ["std-faster-whisper"]
-mlx-audio = ["std-mlx-audio"]
-qwen3-asr = ["std-qwen3-asr"]
+# No engine plugins are declared as dependencies or extras — on purpose. This app
+# depends ONLY on the protocol (`standard-asr`); it never imports or bundles a
+# concrete engine. To get a working engine, install ANY Standard ASR-compliant
+# plugin into the same environment (see the README) and it is discovered via entry
+# points. That is the whole point: the application does not know, and does not need
+# to know, which ASR engine it is talking to.
 
 [project.scripts]
 standard-asr-live = "standard_asr_live.cli:main"
 
-# Local development override: resolve `standard-asr` (and the cookbook demo
-# engines) from the local monorepo checkout instead of fetching the git branch
-# over the network. The `[project]` dependency above stays pinned to the public
-# git branch for a publish-ready manifest; this block only affects local `uv`
-# resolution. Remove it (or it is simply ignored) when building from a wheel.
+# Local development override: resolve `standard-asr` from the co-located monorepo
+# checkout instead of fetching the git branch over the network. The `[project]`
+# dependency above stays pinned to the public git branch for a publish-ready
+# manifest; this block only affects local `uv` resolution and is ignored when
+# building from a wheel. NOTE: engine plugins are intentionally NOT listed here —
+# the app depends on no engine; install any compliant plugin yourself (see the
+# README) and it is discovered via entry points.
 [tool.uv.sources]
 standard-asr = { path = "../standard_asr", editable = true }
-std-faster-whisper = { path = "../std-faster-whisper", editable = true }
-std-mlx-audio = { path = "../std-mlx-audio", editable = true }
-std-qwen3-asr = { path = "../std-qwen3-asr", editable = true }
 # The scripted test-double engine, discovered via entry points in the test suite.
 std-scripted-asr = { path = "tests/scripted_engine", editable = true }
 

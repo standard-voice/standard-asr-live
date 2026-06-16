@@ -67,11 +67,11 @@ _TOP_LEVEL_COMMANDS = frozenset({"models", "show", "run", "doctor"})
 _LIVE_EPILOG = """\
 Examples:
   standard-asr-live                                    # pick a model, capture from the mic
-  standard-asr-live faster-whisper/large-v3            # that model, from the microphone
-  standard-asr-live faster-whisper/large-v3 talk.wav   # transcribe an audio file
+  standard-asr-live <model-key>                        # a specific model, from the microphone
+  standard-asr-live <model-key> talk.wav               # transcribe an audio file
   standard-asr-live --file talk.wav                    # file input, pick the model interactively
   standard-asr-live --list-devices                     # list microphone input devices
-  standard-asr-live models                             # list installed engines/models
+  standard-asr-live models                             # list installed models & their keys
 
 Press Ctrl-C to stop microphone capture; the transcript is finalized and shown.
 """
@@ -97,10 +97,11 @@ def _cmd_models(args: argparse.Namespace, console: Console) -> int:
             Panel(
                 Text(
                     "No Standard ASR engines are installed.\n\n"
-                    "Install one, e.g. the cookbook faster-whisper plugin:\n"
-                    "  uv pip install -e <standard_asr>/cookbook/std_faster_whisper\n"
-                    "or the dummy demo engine:\n"
-                    "  uv pip install -e <standard_asr>/cookbook/std_dummy_asr",
+                    "Install ANY compliant engine plugin into this environment — the\n"
+                    "app discovers it automatically (it never imports an engine). e.g.:\n"
+                    "  uv pip install git+https://github.com/standard-voice/std-mlx-audio\n"
+                    "  uv pip install git+https://github.com/standard-voice/std-faster-whisper\n"
+                    "...or any other Standard ASR plugin, including one you wrote.",
                     style="yellow",
                 ),
                 title="no engines found",
@@ -826,7 +827,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_models.set_defaults(func=_cmd_models)
 
     p_show = sub.add_parser("show", help="Show properties, capabilities, and config schema.")
-    p_show.add_argument("model", help="Model key, e.g. 'faster-whisper/large-v3'.")
+    p_show.add_argument("model", help="Model key (run 'models' to list installed keys).")
     p_show.add_argument("--strict", action="store_true", help="Fail on invalid entry points.")
     p_show.set_defaults(func=_cmd_show)
 
@@ -842,7 +843,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "model",
         nargs="?",
         default=None,
-        help="Model key, e.g. 'faster-whisper/large-v3' (interactive picker if omitted).",
+        help="Model key to run (interactive picker if omitted; 'models' lists installed keys).",
     )
     p_run.add_argument(
         "audio",
@@ -913,7 +914,7 @@ def _with_default_command(argv: list[str]) -> list[str]:
 
     The live app's primary action is ``run``, so a bare ``standard-asr-live`` or an
     invocation starting with a model key or a run flag (rather than an explicit
-    subcommand) is treated as ``run`` -- e.g. ``standard-asr-live faster-whisper/tiny``
+    subcommand) is treated as ``run`` -- e.g. ``standard-asr-live <model-key>``
     and ``standard-asr-live --mic`` both launch the app. Explicit subcommands
     (``models`` / ``show`` / ``run`` / ``doctor``) and the top-level ``-h`` /
     ``--help`` / ``--version`` are left untouched.
