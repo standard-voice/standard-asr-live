@@ -28,6 +28,7 @@ import asyncio
 import logging
 import queue
 import threading
+import time
 from collections.abc import AsyncIterator, Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -53,6 +54,13 @@ _log = logging.getLogger("standard_asr_live.driver")
 
 #: How long to wait for a background session thread to stop before abandoning it.
 _WORKER_JOIN_TIMEOUT = 10.0
+
+#: Poll slice for the sync consumer's blocking event dequeue. A timeout-less
+#: ``queue.Queue.get()`` on the main thread is NOT interruptible by SIGINT, so a
+#: Ctrl-C during a quiet stretch (no events queued) would be swallowed and the app
+#: would appear hung. Dequeuing in short slices lets the installed SIGINT handler
+#: run between slices, so Ctrl-C always lands.
+_EVENT_POLL_SECONDS = 0.2
 
 
 def _join_worker(worker: threading.Thread) -> None:
@@ -383,8 +391,12 @@ def _iter_sync_incremental(
     """Drive an incremental session through the synchronous bridge.
 
     Uses :class:`SyncSession`, which owns a background event loop, so the whole
-    feed/consume cycle is synchronous. ``feed`` accepts a sync iterable of byte
-    chunks; the bridge consumes it on its own loop while we iterate events.
+    consume cycle is synchronous. We feed the **off-loop** async chunk source
+    (:func:`_aiter_chunk_source`): the bridge drains it on its own loop, and a
+    sync source would block that loop on every PortAudio ``read()`` (mic) or
+    pacing ``time.sleep()`` (file) -- starving the engine and the session's
+    in-loop deadlines just as it would on the async path. The async adapter pulls
+    each blocking chunk on a worker thread instead, keeping the bridge loop free.
 
     Args:
         engine: The engine instance.
@@ -407,7 +419,10 @@ def _iter_sync_incremental(
     session = SyncSession(inner)
     try:
         with session:
-            session.feed(_chunk_source(cfg, stop))
+            # Feed the off-loop async source so blocking reads/sleeps never run on
+            # the bridge's event loop (SyncSession.feed forwards to the async
+            # session's feed, which accepts an AsyncIterable).
+            session.feed(_aiter_chunk_source(cfg, stop))
             yield from session
             result_holder.append(session.result())
             diag_holder.append(session.diagnostics())
@@ -448,6 +463,7 @@ def _iter_async_incremental(
     error_holder: list[BaseException] = []
 
     async def _run() -> None:
+        loop = asyncio.get_running_loop()
         session = engine.start_transcription(
             audio_format=audio_format,
             params=cfg.params,
@@ -458,7 +474,17 @@ def _iter_async_incremental(
         async with session:
             session.feed(_aiter_chunk_source(cfg, stop))
             async for event in session:
-                event_q.put(event)
+                # Hand the event to the (synchronous) consumer WITHOUT blocking the
+                # event loop. A bare ``event_q.put(event)`` is synchronous, so when
+                # the bounded queue fills (a momentarily slow renderer) it would
+                # freeze the whole loop -- the audio-feed task could no longer run
+                # and the session's in-loop deadlines could not fire, so audio would
+                # stop being consumed and the stream would wedge (no more events,
+                # and a Ctrl-C the frozen loop never observes). Offloading the
+                # blocking put to a worker thread keeps the loop responsive under
+                # backpressure; awaiting it preserves event order and still applies
+                # real backpressure (we stop pulling events until there is room).
+                await loop.run_in_executor(None, event_q.put, event)
             result_holder.append(session.result())
             diag_holder.append(session.diagnostics())
 
@@ -474,13 +500,46 @@ def _iter_async_incremental(
     worker.start()
     try:
         while True:
-            item = event_q.get()
+            # Dequeue in short slices rather than an unbounded ``get()``: a blocking
+            # ``queue.Queue.get()`` with no timeout is NOT interruptible by SIGINT on
+            # the main thread (CPython cannot run the signal handler during the
+            # timeout-less lock wait), so a Ctrl-C during a quiet stretch (empty
+            # queue, e.g. the speaker pausing) would be swallowed and the app would
+            # look hung and unkillable. The slice lets the installed SIGINT handler
+            # run between waits, so Ctrl-C always lands.
+            try:
+                item = event_q.get(timeout=_EVENT_POLL_SECONDS)
+            except queue.Empty:
+                if not worker.is_alive():
+                    # Defensive: the worker always enqueues the sentinel in its
+                    # finally, so this only trips if it died without doing so.
+                    break
+                continue
             if item is sentinel:
                 break
             yield item
     finally:
         stop.set()
-        _join_worker(worker)
+        # Keep draining while we wait for the worker to exit. If the consumer left
+        # early (an exception, or a hard Ctrl-C closing this generator), the worker
+        # may be blocked enqueuing an event or the terminal sentinel into a full
+        # queue; draining lets it run to completion and append the final
+        # result/diagnostics instead of wedging until -- and being abandoned by --
+        # the join timeout. Bounded by that same timeout so a genuinely frozen
+        # engine cannot trap the caller here.
+        deadline = time.monotonic() + _WORKER_JOIN_TIMEOUT
+        while worker.is_alive() and time.monotonic() < deadline:
+            try:
+                event_q.get(timeout=_EVENT_POLL_SECONDS)
+            except queue.Empty:
+                continue
+        if worker.is_alive():
+            _log.warning(
+                "session worker %r did not stop within %.0fs; abandoning it -- the "
+                "final result/diagnostics may be missing or incomplete.",
+                worker.name,
+                _WORKER_JOIN_TIMEOUT,
+            )
     if error_holder:
         raise error_holder[0]
 

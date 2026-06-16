@@ -20,16 +20,19 @@ import getpass
 import json
 import logging
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from rich.console import Console
+from rich.console import Console, Group
 from rich.json import JSON
+from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
+from standard_asr import StandardASRError
 
 from . import __version__
 from .audio_io import ChunkPlan, list_input_devices
@@ -277,6 +280,42 @@ def _create_engine(
         ) from exc
 
 
+def _prepare_engine(engine: StandardASR, key: str, console: Console) -> None:
+    """Warm up the engine (download / load weights) BEFORE the live UI starts.
+
+    The protocol's optional, synchronous, idempotent pre-warm hook (``prepare``,
+    spec IC.11) exists precisely to move the lazy first-use side effects -- most
+    notably a multi-gigabyte weight download with its own ``tqdm`` progress bars --
+    off the first transcription. The first transcription happens *inside* the live
+    ``Live`` region, so without this the download bars bleed into the dashboard.
+    Running it here means that progress prints to the normal console (where it is
+    welcome and readable) and the live view starts on a clean screen.
+
+    A failure (e.g. no network on a cold cache) is normalized to a clean
+    :class:`LiveAppError` rather than surfacing a raw traceback.
+
+    Args:
+        engine: The engine instance.
+        key: The model key (for messages).
+        console: Output console.
+
+    Raises:
+        LiveAppError: If the pre-warm hook fails.
+    """
+    prepare = getattr(engine, "prepare", None)
+    if not callable(prepare):
+        return
+    console.print(
+        Text(f"Preparing {key} (first run may download model weights)…", style="dim")
+    )
+    try:
+        prepare()
+    except Exception as exc:  # noqa: BLE001 - normalized to a clean user-facing error
+        raise LiveAppError(
+            f"Failed to prepare engine {key!r}: {describe_exception(exc)}."
+        ) from exc
+
+
 # --------------------------------------------------------------------------- #
 # run
 # --------------------------------------------------------------------------- #
@@ -322,8 +361,10 @@ def _select_model_key(args: argparse.Namespace, registry, console: Console) -> s
 def _resolve_sample_rate(engine: StandardASR) -> int:
     """Choose a PCM wire sample rate the engine will accept.
 
-    Prefers the engine's ``native_sample_rate`` (which the reachability
-    invariants guarantee is acceptable); falls back to 16 kHz.
+    Precedence follows the wire contract: an engine that declares a
+    ``required_input_sample_rate`` hard-requires exactly that rate, so it wins;
+    otherwise the engine's ``native_sample_rate`` (which the reachability
+    invariants guarantee is accepted) is used; failing both, 16 kHz.
 
     Args:
         engine: The engine instance.
@@ -345,10 +386,23 @@ def _runtime_params(args: argparse.Namespace):
 
     Returns:
         A :class:`~standard_asr.RuntimeParams`.
+
+    Raises:
+        LiveAppError: If ``--language`` is not a valid BCP-47 tag, so a bad tag
+            yields a clean message instead of a raw pydantic ``ValidationError``
+            traceback (``ValidationError`` is a ``ValueError`` subclass).
     """
     from standard_asr import RuntimeParams
 
-    return RuntimeParams(language=args.language) if args.language else RuntimeParams()
+    if not args.language:
+        return RuntimeParams()
+    try:
+        return RuntimeParams(language=args.language)
+    except ValueError as exc:
+        raise LiveAppError(
+            f"Invalid --language {args.language!r}: not a valid BCP-47 language tag. "
+            "Pass a tag like 'en', 'zh', or 'es', or 'auto' to auto-detect."
+        ) from exc
 
 
 def _cmd_run(args: argparse.Namespace, console: Console) -> int:
@@ -377,6 +431,9 @@ def _cmd_run(args: argparse.Namespace, console: Console) -> int:
         Text(f"config: {json.dumps(redacted_config(fields, config))}", style="dim")
     )
     engine = _create_engine(registry, key, config, console)
+    # Download / load weights now, on the normal console, so the model's own
+    # progress bars do not bleed into the live dashboard once it takes the screen.
+    _prepare_engine(engine, key, console)
 
     source, file_path = _resolve_source(args)
     if source is Source.MIC and args.device is not None:
@@ -569,6 +626,18 @@ def _consume_with_graceful_stop(
     return flags["interrupted"]
 
 
+#: Minimum row budget for the bottom dashboard (STATUS + DIAGNOSTICS). The actual
+#: height is measured per frame (so a wrapped counters line or a burst of
+#: diagnostics is never cropped); this is just the floor that keeps the dashboard
+#: pinned on screen while the transcript flexes into the remaining rows.
+_BOTTOM_PANEL_MIN_ROWS = 9
+
+#: Below this terminal width the STATUS / DIAGNOSTICS panels stack vertically
+#: (each full width) instead of side by side, where two ~half-width columns would
+#: wrap their content into an unreadable jumble.
+_NARROW_WIDTH = 88
+
+
 def _run_live(
     engine: StandardASR,
     cfg: DriveConfig,
@@ -599,27 +668,81 @@ def _run_live(
         if mode is Mode.BATCH
         else None
     )
+    # The live view is repainted by Rich's auto-refresh thread (via get_renderable
+    # below) while THIS thread folds events into the reducer, so guard the shared
+    # view state with a lock: without it a frame could be built mid-mutation (e.g.
+    # iterating the segment order while apply() rewrites it).
+    render_lock = threading.Lock()
 
-    def _render():
+    def _render(fill: bool = True):
+        """Build the current frame.
+
+        Args:
+            fill: ``True`` (the live dashboard) lays the view into fixed regions
+                that fill the terminal height, so it never overflows and re-flows
+                cleanly on resize. ``False`` (a one-shot ``--plain`` / non-TTY
+                frame) stacks the panels compactly at their natural height instead
+                of padding to a full screen, which suits a pipe / file / CI capture.
+        """
         elapsed = time.monotonic() - started
-        parts = []
-        if spinner_note is not None and not state.is_finished():
-            parts.append(Panel(spinner_note, border_style="yellow"))
-        banner = render_banner(state)
-        if banner is not None:
-            parts.append(banner)
-        parts.append(render_transcript(state))
-        bottom = Table.grid(expand=True)
-        bottom.add_column(ratio=1)
-        bottom.add_column(ratio=1)
-        bottom.add_row(
-            render_status(state, elapsed=elapsed, mode=mode.value, engine_key=key),
-            render_diagnostics(session.diagnostics()),
-        )
-        parts.append(bottom)
-        from rich.console import Group
+        with render_lock:
+            # Bottom dashboard (STATUS + DIAGNOSTICS): side by side on a roomy
+            # terminal; stacked full-width on a narrow one, where two half-width
+            # columns would wrap their content into an unreadable jumble.
+            status_panel = render_status(state, elapsed=elapsed, mode=mode.value, engine_key=key)
+            diag_panel = render_diagnostics(session.diagnostics())
+            if console.size.width < _NARROW_WIDTH:
+                bottom = Group(status_panel, diag_panel)
+            else:
+                grid = Table.grid(expand=True)
+                grid.add_column(ratio=1)
+                grid.add_column(ratio=1)
+                grid.add_row(status_panel, diag_panel)
+                bottom = grid
+            banner = render_banner(state)
+            show_spinner = spinner_note is not None and not state.is_finished()
 
-        return Group(*parts)
+            if not fill:
+                # Compact one-shot frame: stacked panels, full (untruncated)
+                # transcript, no height padding.
+                parts = []
+                if show_spinner:
+                    parts.append(Panel(spinner_note, border_style="yellow"))
+                if banner is not None:
+                    parts.append(banner)
+                parts.append(render_transcript(state))
+                parts.append(bottom)
+                return Group(*parts)
+
+            # Live dashboard: fixed regions sized to the CURRENT terminal so it
+            # never overflows -- optional spinner/banner (fixed), the transcript
+            # (flexes into the remaining rows, bounded to its tail), and the bottom
+            # dashboard (fixed). A Layout re-renders against the live console size
+            # every frame, so a terminal resize just re-flows rather than corrupts.
+            sections: list[Layout] = []
+            # Measure the bottom dashboard at the current width so a wrapped
+            # counters line or a burst of diagnostics is never cropped; clamp so it
+            # can never eat more than half the screen (leaving room for captions).
+            measure_opts = console.options.update(width=console.size.width, height=None)
+            bottom_rows = len(console.render_lines(bottom, measure_opts, pad=False))
+            bottom_rows = max(_BOTTOM_PANEL_MIN_ROWS, min(bottom_rows, console.size.height // 2))
+            reserved = bottom_rows
+            if show_spinner:
+                sections.append(Layout(Panel(spinner_note, border_style="yellow"), size=3))
+                reserved += 3
+            if banner is not None:
+                sections.append(Layout(banner, size=3))
+                reserved += 3
+            # -2 leaves room for the transcript panel's own border within its region.
+            transcript_budget = max(1, console.size.height - reserved - 2)
+            sections.append(
+                Layout(render_transcript(state, max_lines=transcript_budget), ratio=1)
+            )
+            sections.append(Layout(bottom, size=bottom_rows))
+
+            root = Layout()
+            root.split_column(*sections)
+            return root
 
     use_live = sys.stdout.isatty() and not args.plain
     # Only a live microphone is gracefully drained on Ctrl-C (it has no natural
@@ -629,15 +752,30 @@ def _run_live(
     try:
         events_log = _open_events_log(args)
         if use_live:
-            with Live(_render(), console=console, refresh_per_second=12, screen=False) as live:
+            # screen=True paints into the terminal's alternate buffer: each frame is
+            # redrawn from a clean slate sized to the current terminal, so frames
+            # never stack and a resize re-flows cleanly (the old screen=False inline
+            # redraw stacked panels once the content outgrew the viewport and
+            # corrupted on resize). It also isolates the live view from any
+            # scrollback (e.g. model-download progress) printed before it.
+            # get_renderable=_render lets the auto-refresh thread re-evaluate the
+            # frame every tick, so the elapsed clock and the batch spinner keep
+            # animating even while this thread is blocked waiting on the next event
+            # (e.g. a long batch transcribe), rather than freezing between events.
+            with Live(
+                get_renderable=_render,
+                console=console,
+                refresh_per_second=12,
+                screen=True,
+            ) as live:
 
                 def _on_event(event) -> None:
-                    state.apply(event)
+                    with render_lock:
+                        state.apply(event)
                     _log_event(events_log, event)
-                    live.update(_render())
 
                 interrupted = _consume_with_graceful_stop(session, _on_event, graceful=graceful)
-                live.update(_render())
+                live.refresh()
         else:
             # Non-TTY / --plain: fold all events, then print the final frame once.
             def _on_event_plain(event) -> None:
@@ -645,7 +783,7 @@ def _run_live(
                 _log_event(events_log, event)
 
             interrupted = _consume_with_graceful_stop(session, _on_event_plain, graceful=graceful)
-            console.print(_render())
+            console.print(_render(fill=False))
     finally:
         # Stop capture, join the session thread, and capture the final result
         # (idempotent after a normal exhaustion / graceful drain). The events log is
@@ -953,6 +1091,12 @@ def main(argv: list[str] | None = None) -> int:
         return int(args.func(args, console))
     except LiveAppError as exc:
         console.print(Text(f"error: {exc}", style="bold red"))
+        return 1
+    except StandardASRError as exc:
+        # Any protocol-level fault that escapes a command (e.g. an engine raising
+        # AudioProcessingError on a corrupt file, or rejecting the wire format /
+        # params) becomes a clean message + exit 1 rather than a raw traceback.
+        console.print(Text(f"error: {describe_exception(exc)}", style="bold red"))
         return 1
     except EOFError:
         # Ctrl-D / closed stdin at an interactive prompt (secret entry, model picker):

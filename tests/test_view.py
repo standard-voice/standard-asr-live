@@ -79,6 +79,30 @@ def test_transcript_panel_renders_segments() -> None:
     assert "in progress" in out
 
 
+def test_transcript_panel_bounds_to_tail_when_capped() -> None:
+    """With max_lines set, the panel keeps only the newest lines (a caption tail)
+    plus an elision marker, so it never grows past its region -- the unbounded
+    growth that made the live view stack and overflow the terminal."""
+    state = LiveTranscript()
+    for i in range(40):
+        state.apply(TranscriptionEvent.final(f"s{i}", f"line {i}", stable_until=0))
+    out = _plain(render_transcript(state, max_lines=5))
+    assert "line 39" in out  # newest is kept
+    assert "line 0" not in out  # oldest is dropped
+    assert "line 30" not in out  # well outside the 5-line tail
+    assert "earlier line" in out  # elision marker tells the user lines are hidden
+
+
+def test_transcript_panel_unbounded_when_no_cap() -> None:
+    """Without max_lines the panel shows every line (small transcripts are intact)."""
+    state = LiveTranscript()
+    for i in range(3):
+        state.apply(TranscriptionEvent.final(f"s{i}", f"line {i}", stable_until=0))
+    out = _plain(render_transcript(state))
+    assert "line 0" in out and "line 2" in out
+    assert "earlier line" not in out
+
+
 def test_status_panel_shows_counts_and_language() -> None:
     """The status panel reports engine, mode, counts, and language."""
     state = LiveTranscript()

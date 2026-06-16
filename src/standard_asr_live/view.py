@@ -76,11 +76,16 @@ def render_segment(seg: SegmentView) -> Text:
     return line
 
 
-def render_transcript(state: LiveTranscript) -> RenderableType:
+def render_transcript(state: LiveTranscript, *, max_lines: int | None = None) -> RenderableType:
     """Render the transcript panel from the reducer state.
 
     Args:
         state: The live transcript reducer state.
+        max_lines: Optional cap on how many transcript lines to show. When the
+            transcript is longer, the most recent ``max_lines`` are kept (a live
+            caption tail) with an elision marker, so the panel never grows past
+            its allotted region -- the unbounded growth that made the live view
+            stack and overflow the terminal.
 
     Returns:
         A renderable transcript panel.
@@ -96,6 +101,15 @@ def render_transcript(state: LiveTranscript) -> RenderableType:
         lines.append(render_segment(retired))
     if not lines:
         lines = [Text("(listening...)", style="dim")]
+    elif max_lines is not None and max_lines >= 1 and len(lines) > max_lines:
+        # Keep the newest lines (the live tail). Reserve one row for the marker
+        # when there is room for it; otherwise just hard-tail to the budget.
+        if max_lines > 1:
+            hidden = len(lines) - (max_lines - 1)
+            marker = Text(f"⋯ {hidden} earlier line(s) ⋯", style="dim italic")
+            lines = [marker, *lines[-(max_lines - 1) :]]
+        else:
+            lines = lines[-max_lines:]
     body = Group(*lines)
     title = "TRANSCRIPT"
     return Panel(body, title=title, title_align="left", border_style="blue", padding=(0, 1))

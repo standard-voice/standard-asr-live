@@ -20,10 +20,12 @@ from pathlib import Path
 import pytest
 from standard_asr import discover_models
 
+import standard_asr_live.cli as cli_mod
 from standard_asr_live.cli import (
     _consume_with_graceful_stop,
     _open_events_log,
     _resolve_source,
+    _runtime_params,
     _validate_device,
     _with_default_command,
     main,
@@ -375,3 +377,36 @@ def test_open_events_log_oserror_is_wrapped(tmp_path: Path) -> None:
     args = argparse.Namespace(json_events=str(blocker / "events.jsonl"))
     with pytest.raises(LiveAppError, match="--json-events"):
         _open_events_log(args)
+
+
+def test_runtime_params_rejects_malformed_language() -> None:
+    """A bad --language tag becomes a clean LiveAppError, not a pydantic traceback."""
+    with pytest.raises(LiveAppError, match="Invalid --language"):
+        _runtime_params(argparse.Namespace(language="bad tag!!"))
+
+
+def test_runtime_params_accepts_valid_language_and_none() -> None:
+    """Valid tags (and no --language) build RuntimeParams without raising."""
+    assert _runtime_params(argparse.Namespace(language=None)) is not None
+    assert _runtime_params(argparse.Namespace(language="en")) is not None
+    assert _runtime_params(argparse.Namespace(language="auto")) is not None
+
+
+def test_main_converts_protocol_error_to_clean_exit(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A StandardASRError escaping a command becomes 'error: ...' + exit 1, not a traceback."""
+    from standard_asr import StandardASRError
+
+    def boom(_args: argparse.Namespace, _console: object) -> int:
+        raise StandardASRError("simulated engine fault")
+
+    # _build_parser binds func=_cmd_doctor by name at call time, so patching the
+    # module global routes `doctor` to our raising stand-in.
+    monkeypatch.setattr(cli_mod, "_cmd_doctor", boom)
+    rc = main(["doctor"])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "error:" in out
+    assert "simulated engine fault" in out
+    assert "Traceback" not in out

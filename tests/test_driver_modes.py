@@ -21,6 +21,7 @@ from standard_asr import (
     RuntimeParams,
     Segment,
     TranscriptionResult,
+    discover_models,
 )
 from standard_asr.capabilities import (
     BatchCapabilities,
@@ -37,6 +38,7 @@ from standard_asr.engine import (
 import standard_asr_live.driver as driver_mod
 from standard_asr_live.audio_io import ChunkPlan
 from standard_asr_live.driver import DriveConfig, DriveSession, Mode, Source, drive, select_mode
+from standard_asr_live.engine_view import LiveTranscript
 from standard_asr_live.errors import MicrophoneUnsupportedError
 
 
@@ -298,3 +300,55 @@ def test_join_worker_warns_when_thread_stays_alive(
     with caplog.at_level(logging.WARNING, logger="standard_asr_live.driver"):
         driver_mod._join_worker(_StuckThread())
     assert any("did not stop" in r.message for r in caplog.records)
+
+
+# --------------------------------------------------------------------------- #
+# Incremental bridge, end to end through the REAL protocol session -- the path
+# that regressed into a stall + un-interruptible Ctrl-C and had no coverage.
+# --------------------------------------------------------------------------- #
+_KEY = "scripted/demo"
+_SILENCE = b"\x00\x00" * 1600  # 100 ms of 16 kHz mono silence
+
+
+@pytest.mark.parametrize("use_sync", [False, True])
+def test_incremental_drive_delivers_all_events_and_terminates(
+    monkeypatch: pytest.MonkeyPatch, use_sync: bool
+) -> None:
+    """Driving the incremental bridge to completion yields the scripted event
+    stream and stops on its own -- for BOTH the async default and the ``--sync``
+    bridge.
+
+    A finite chunk source stands in for a microphone that has been stopped: the
+    session finalizes, the terminal event flows through, and the authoritative
+    result is recovered. This exercises the consumer/feed bridge that regressed
+    into a hang (the blocking event-queue put froze the loop and the
+    timeout-less get swallowed Ctrl-C). If the bridge wedged, this test would
+    hang rather than pass.
+    """
+    if _KEY not in discover_models().names():  # pragma: no cover - env without plugin
+        pytest.skip("scripted/demo engine not installed")
+    engine = discover_models().create(_KEY)
+    # Replace the real (blocking) chunk source with a finite list of silence, so
+    # no microphone or ffmpeg is needed and the source ends deterministically.
+    monkeypatch.setattr(
+        driver_mod, "_chunk_source", lambda cfg, stop: iter([_SILENCE, _SILENCE])
+    )
+    cfg = DriveConfig(
+        source=Source.MIC,
+        file_path=None,
+        plan=ChunkPlan(sample_rate=16000, chunk_ms=100, paced=False),
+        params=RuntimeParams(),
+        use_sync_bridge=use_sync,
+    )
+    session = drive(engine, cfg)
+    state = LiveTranscript()
+    for event in session.events:
+        state.apply(event)
+    session.close()
+
+    assert state.is_finished() is True
+    assert state.ended_in_error is False
+    assert state.counts["final"] >= 1
+    result = session.result()
+    assert result is not None
+    assert "brown fox jumps" in result.text
