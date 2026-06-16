@@ -6,8 +6,9 @@ readme = "../../README.md"
 requires-python = ">=3.10"
 dependencies = ["standard-asr>=0.1.0"]
 
-[tool.uv.sources]
-standard-asr = { path = "../../../standard_asr", editable = true }
+# No `[tool.uv.sources]` override: `standard-asr` resolves through the consuming
+# project (standard-asr-live), which pulls it from GitHub `main` — so this test
+# engine builds from the same protocol source, with no monorepo path assumption.
 
 # A streaming engine the live app can discover and drive end-to-end. Used only in
 # tests / opt-in demos; the application code never imports it.
