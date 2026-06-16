@@ -6,7 +6,7 @@ can re-run every command below from the repo root and reproduce the evidence in
 
 - **Machine:** Apple M5 Max, arm64, macOS 27 (Metal, no CUDA).
 - **Toolchain:** `uv` 0.11.21, `ffmpeg` 8.1.1 on PATH, Python pinned to 3.12.
-- **`standard-asr`:** the `refactor/v0.1.0-redesign` branch (installed from the
+- **`standard-asr`:** the `main` branch (installed from the
   local monorepo checkout for offline dev; the published `pyproject.toml` pins
   the public git branch).
 

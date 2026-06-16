@@ -1,5 +1,7 @@
 # standard-asr-live
 
+> ⚠️ **Experimental — for protocol testing.** This is an experimental demo app for the [Standard ASR](https://github.com/standard-voice/standard_asr) protocol, published to exercise the interface end-to-end. Expect breaking changes; it is not production-ready. It may later be folded into `standard-asr` itself.
+
 **Live streaming speech-to-text in your terminal, with real-time on-screen
 corrections — against _any_ installed [Standard ASR](https://github.com/standard-voice/standard_asr) engine.**
 

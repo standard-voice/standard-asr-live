@@ -2,7 +2,7 @@
 
 Findings from building **standard-asr-live** (a live streaming captioning CLI) as
 a demanding consumer of the `standard-asr` v0.1.0 protocol on the
-`refactor/v0.1.0-redesign` branch. The app developer is the protocol's primary
+`main` branch. The app developer is the protocol's primary
 stakeholder, so this is written to be directly actionable.
 
 Each finding: **what happened**, **why it matters**, **suggested improvement**.
