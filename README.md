@@ -17,6 +17,8 @@ never imports a concrete engine — every engine is discovered via entry points.
 This app *is* the proof of the protocol's headline promise: **write once, run with
 any engine**, streaming semantics included.
 
+https://github.com/user-attachments/assets/528f5545-4c79-4a5b-a7fd-562cbf833938
+
 ```
 ┌─ standard-asr-live ─ scripted/demo ─ incremental ────────────────────────────┐
 │  TRANSCRIPT                                                                   │
