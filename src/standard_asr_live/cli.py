@@ -905,7 +905,7 @@ def _cmd_doctor(args: argparse.Namespace, console: Console) -> int:
     """
     import shutil
 
-    from standard_asr.doctor import diagnose
+    from standard_asr.toolchain.doctor import diagnose
 
     table = Table(title="Environment", title_style="bold", show_header=False)
     table.add_column(style="dim", justify="right")
@@ -927,7 +927,7 @@ def _cmd_doctor(args: argparse.Namespace, console: Console) -> int:
     # diagnose() is keyword-only (group=...) and returns a DoctorReport; it checks
     # numpy compatibility across installed plugins (a real "dependency hell" guard).
     report = diagnose()
-    dep_table = Table(title="standard_asr.doctor (dependency conflicts)", show_header=False)
+    dep_table = Table(title="standard_asr.toolchain.doctor (dependency conflicts)", show_header=False)
     dep_table.add_column(style="dim", justify="right")
     dep_table.add_column()
     dep_table.add_row("python", report.python_version)

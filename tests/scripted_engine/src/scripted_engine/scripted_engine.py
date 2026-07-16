@@ -34,7 +34,7 @@ from standard_asr import (
     TranscriptionEvent,
     TranscriptionResult,
 )
-from standard_asr.capabilities import (
+from standard_asr.contract.capabilities import (
     DeclaredCapabilities,
     FinalityCap,
     FlagCap,
@@ -49,7 +49,7 @@ from standard_asr.engine import (
     LanguageConfigMixin,
     PreparedAudio,
 )
-from standard_asr.streaming import TranscriptionSession
+from standard_asr.runtime.streaming import TranscriptionSession
 
 
 class ScriptedConfig(LanguageConfigMixin, BaseConfig[Literal["scripted"]]):

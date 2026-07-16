@@ -11,7 +11,12 @@ keywords = ["asr", "speech-to-text", "streaming", "captions", "standard-asr", "t
 # Engine-agnostic by construction: we depend ONLY on the protocol (standard-asr)
 # plus our UI / audio libraries. We never depend on a concrete ASR engine.
 dependencies = [
-    "standard-asr>=0.1.1",
+    # Tracks protocol `main`: the subpackage restructure (standard_asr#32)
+    # landed after the v0.1.1 release, and this app (and its scripted test
+    # double) now uses the new module layout. Swap back to a plain version
+    # floor (e.g. ">=0.2.0") at the next standard-asr release — same
+    # convention as the std-* plugin repos.
+    "standard-asr @ git+https://github.com/standard-voice/standard_asr.git@main",
     "rich>=13.7",
     # Microphone capture. sounddevice wheels bundle PortAudio, so the live mic
     # (this app's centerpiece) works out of the box; audio_io still imports it
@@ -29,8 +34,8 @@ dependencies = [
 [project.scripts]
 standard-asr-live = "standard_asr_live.cli:main"
 
-# `standard-asr` is the published protocol package from PyPI (the `[project]`
-# dependency above), so this app installs standalone with a plain `uv sync` — no
+# `standard-asr` resolves from GitHub `main` (the `[project]` dependency
+# above), so this app installs standalone with a plain `uv sync` — no
 # co-located monorepo checkout required. The only local source is the in-repo
 # scripted test-double engine used by the test suite. Engine plugins are
 # intentionally NOT listed here: the app depends on no engine; install any

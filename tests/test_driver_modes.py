@@ -23,7 +23,7 @@ from standard_asr import (
     TranscriptionResult,
     discover_models,
 )
-from standard_asr.capabilities import (
+from standard_asr.contract.capabilities import (
     BatchCapabilities,
     DeclaredCapabilities,
 )
