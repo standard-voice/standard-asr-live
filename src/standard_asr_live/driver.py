@@ -42,6 +42,7 @@ from standard_asr import (
     StreamDeadlines,
     SyncSession,
     TranscriptionEvent,
+    bind_session_capabilities,
 )
 
 from .audio_io import WIRE_ENCODING, ChunkPlan, iter_file_chunks, iter_mic_chunks
@@ -414,7 +415,12 @@ def _iter_sync_incremental(
         params=cfg.params,
         deadlines=_deadlines(),
     )
-    if cfg.strict_lifecycle:  # pragma: no cover - exercised via async path in tests
+    # Give the session the engine's streaming capabilities, so it records a
+    # diagnostic when an event uses one the engine does not declare. An
+    # EngineBase engine has already done this; this call covers an engine that
+    # implements the protocol without EngineBase.
+    bind_session_capabilities(inner, engine)
+    if cfg.strict_lifecycle:
         _enable_strict_lifecycle(inner)
     session = SyncSession(inner)
     try:
@@ -469,6 +475,8 @@ def _iter_async_incremental(
             params=cfg.params,
             deadlines=_deadlines(),
         )
+        # Same capability binding as the sync path above.
+        bind_session_capabilities(session, engine)
         if cfg.strict_lifecycle:
             _enable_strict_lifecycle(session)
         async with session:
@@ -570,6 +578,10 @@ def _drive_whole_input(engine: StandardASR, cfg: DriveConfig) -> DriveSession:
         session = engine.start_transcription(
             audio=AudioPath(cfg.file_path), params=cfg.params, deadlines=_deadlines()
         )
+        # Same capability binding as the incremental paths.
+        bind_session_capabilities(session, engine)
+        if cfg.strict_lifecycle:
+            _enable_strict_lifecycle(session)
         async with session:
             async for event in session:
                 event_q.put(event)

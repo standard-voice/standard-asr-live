@@ -38,7 +38,7 @@ def test_scripted_engine_is_discovered_with_streaming_caps() -> None:
     assert engine.supports("streaming_input")
     assert engine.supports("streaming.emits_partials")
     assert engine.supports("streaming.re_segments")
-    assert engine.supports("streaming.word_stability")
+    assert engine.supports("streaming.partial_stability")
 
 
 async def test_async_session_drives_reducer_to_correct_result() -> None:
@@ -68,9 +68,45 @@ async def test_async_session_drives_reducer_to_correct_result() -> None:
     # The authoritative result text contains the corrected transcript.
     assert "brown fox jumps" in result.text
     assert "Over the lazy dog." in result.text
-    # A fully spec-compliant script produces no suppression diagnostics.
+    # A fully spec-compliant script produces no suppression diagnostics, and,
+    # since the session checks every event against the engine's declared
+    # streaming capabilities, no capability diagnostic either.
     suppressions = [d for d in diagnostics if d.level == "warning"]
     assert suppressions == [], f"unexpected suppression diagnostics: {suppressions}"
+
+
+async def test_supersede_withdraws_stable_text_through_real_session() -> None:
+    """The session admits a replacement that does not keep the retired stable text.
+
+    A ``supersede`` withdraws the retired segment together with its stable
+    text, so the replacement may say something else. The session's guard must
+    deliver every event without a diagnostic, and the view must show only the
+    replacement.
+    """
+    _require_scripted()
+    from scripted_engine.scripted_engine import _ScriptedSession
+    from standard_asr import TranscriptionEvent
+
+    events = [
+        TranscriptionEvent.partial("s0", "recognise speech", stable_text="recognise "),
+        TranscriptionEvent.final("s0", "recognise speech"),
+        TranscriptionEvent.supersede(old_ids=["s0"], new_ids=["s1"]),
+        TranscriptionEvent.partial("s1", "wreck a nice", stable_text="wreck "),
+        TranscriptionEvent.final("s1", "wreck a nice beach"),
+    ]
+    state = LiveTranscript()
+    async with _ScriptedSession(events) as session:
+        session.feed([_SILENCE])
+        async for event in session:
+            state.apply(event)
+        result = session.result()
+        diagnostics = session.diagnostics()
+
+    assert diagnostics == []
+    assert state.counts["supersede"] == 1
+    assert [s.segment_id for s in state.live_segments()] == ["s1"]
+    assert state.committed_text() == "wreck a nice beach"
+    assert result.text == "wreck a nice beach"
 
 
 def test_driver_incremental_async_matches_session() -> None:

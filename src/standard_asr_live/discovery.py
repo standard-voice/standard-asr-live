@@ -32,7 +32,8 @@ class StreamingProfile:
         streaming_output: Engine can emit results before all input arrives.
         emits_partials: Engine emits ``partial`` events (live interim text).
         re_segments: Engine may emit ``supersede`` events (corrections).
-        word_stability: Engine provides a meaningful ``stable_until`` frontier.
+        partial_stability: Engine may mark the start of a ``partial``'s text as
+            stable (non-empty ``stable_text``).
         finality_mode: Strongest finality level (``"final"`` / ``"closed"``), or
             ``None`` if streaming is unsupported.
     """
@@ -41,7 +42,7 @@ class StreamingProfile:
     streaming_output: bool
     emits_partials: bool
     re_segments: bool
-    word_stability: bool
+    partial_stability: bool
     finality_mode: str | None
 
     @property
@@ -67,7 +68,7 @@ class StreamingProfile:
             bits.append("partials")
         if self.re_segments:
             bits.append("corrections")
-        if self.word_stability:
+        if self.partial_stability:
             bits.append("stable-prefix")
         if self.finality_mode:
             bits.append(self.finality_mode)
@@ -122,7 +123,7 @@ class ModelInfo:
             streaming_output=caps.supports("streaming_output"),
             emits_partials=caps.supports("streaming.emits_partials"),
             re_segments=caps.supports("streaming.re_segments"),
-            word_stability=caps.supports("streaming.word_stability"),
+            partial_stability=caps.supports("streaming.partial_stability"),
             finality_mode=finality,
         )
 

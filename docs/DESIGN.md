@@ -20,7 +20,7 @@ around it.
    The app is a working demo and a credibility check on the spec.
 2. **A developer building a captioning / voice-agent / live-notes app.** Wants a
    *reference implementation* of the streaming event model done correctly —
-   particularly the `supersede` reduce and the `stable_until` frozen-prefix
+   particularly the `supersede` reduce and the stable text (`stable_text`)
    handling that the spec calls the must-have. They can lift the reducer
    (`engine_view.py`) almost verbatim.
 3. **An end user who wants live transcription in the terminal.** Installs a
@@ -133,30 +133,32 @@ dependency surface, and it captures cleanly to text for CI evidence. Layout:
 ┌─ standard-asr-live ─ faster-whisper/large-v3 ─ streaming ─────────────┐
 │  TRANSCRIPT                                                           │
 │  Hello world this is a test.            ← final (solid)              │
-│  ▏the quick brown fox▏ jumps over       ← stable prefix solid,       │
+│  ▏the quick brown fox▏ jumps over       ← stable text solid,         │
 │                                            tail dim/italic (partial) │
 │                                                                      │
 ├─ STATUS ──────────────────────────────┬─ DIAGNOSTICS ───────────────┤
 │ elapsed 00:12   audio 00:11.4          │ info  audio_conversion      │
 │ events 142  partial 130 final 11 sup 3 │   decoded m4a→pcm, downmix  │
-│ rate 1.0x   segments 11                │ warn  stable_until_clamped  │
+│ rate 1.0x   segments 11                │ warn  stable_text_clamped   │
 │ language en (detected)                 │   …                         │
 └────────────────────────────────────────┴─────────────────────────────┘
 ```
 
 Rendering rules (driven by the reducer state, §4):
 
-- **`partial`** segment → its tail (`text[stable_until:]`) shown **dim + italic**
-  ("not settled yet"); its frozen prefix (`text[:stable_until]`) shown solid.
+- **`partial`** segment → the rest of its text (`text` with exactly the code
+  points of `stable_text` removed from its start) shown **dim + italic** ("not
+  settled yet"); its stable text (`stable_text`) shown solid.
 - **`final`** segment → whole text **solid** (settled). A `closed` final is shown
   identically but tagged closed in the event log (it may have rewritten text;
   the reducer **replaces**, never appends).
 - **`supersede`** → retired `old_ids` segments are **removed** and the new
   `new_ids` segments render as they arrive — visibly, in real time. A brief
   highlight marks the just-superseded region so the correction is *seen*.
-- **`stable_until`** is visualized as the solid/dim boundary within a partial — a
-  literal picture of the frozen prefix. Engines that report `stable_until=0`
-  (`word_stability=false`) simply render the whole partial dim, which is correct.
+- **`stable_text`** is visualized as the solid/dim boundary within a partial — a
+  literal picture of the stable text. Engines that send `stable_text=""` on
+  every partial (`partial_stability` unsupported) simply render the whole
+  partial dim, which is correct.
 - **`progress`** → advance the audio cursor / elapsed; if `reconnect`, surface a
   reconnect banner and the gap.
 - **`error`** → recoverable errors (e.g. `content_lost`) show as a warning banner
@@ -219,7 +221,7 @@ State:
 class SegmentView:
     segment_id: str
     text: str
-    stable_until: int          # codepoints; text[:stable_until] is frozen
+    stable_text: str           # the start of text the engine will not change
     state: Literal["open", "final", "closed"]   # lifecycle as the app sees it
     superseded: bool = False   # marked for one render then dropped (highlight)
     start: float | None = None
@@ -241,12 +243,13 @@ class LiveTranscript:
 `apply(event)` mirrors the spec's canonical reduce (spec ST §5.2) **exactly**,
 extended with the view-only bookkeeping the UI needs:
 
-- `partial`: upsert `segments[id]` with `text` + `stable_until`; state `open`;
+- `partial`: upsert `segments[id]` with `text` + `stable_text`; state `open`;
   append to `order` if new.
 - `final`: same upsert; state `final` (or `closed` if `finality == "closed"`).
   Text is **replaced**, never appended (a `closed` may rewrite/shorten it).
 - `supersede`: mark each `old_id` `superseded` (rendered highlighted once) then
-  drop it from `order`/`segments`; `new_ids` segments appear as their
+  drop it from `order`/`segments`, stable text included; the `new_ids` take the
+  retired block's position in `order`, and their segments appear as their
   `partial`/`final` events arrive. Disjointness/ordering already guaranteed by
   the protocol's event model, so the reducer trusts the validated event.
 - `progress`: set `audio_processed_until`; if `reconnect`, set
@@ -257,7 +260,7 @@ extended with the view-only bookkeeping the UI needs:
 - Always: bump `counts[type]`; track `detected_language` if present.
 
 **Why mirror the spec reduce rather than only call `session.result()`?** Because
-the live view must show *in-progress* `partial` text and the *frozen-prefix*
+the live view must show *in-progress* `partial` text and its *stable text*
 boundary — neither of which appears in the reduced `TranscriptionResult` (which
 contains only committed `final` segments). The app therefore keeps its own view
 state for the screen and uses `session.result()` for the authoritative final
@@ -326,16 +329,16 @@ correction-rendering UI against the *real protocol types*, the repo ships a tiny
 
 - `tests/scripted_engine.py` — a `StandardASR` engine (subclass of `EngineBase`)
   that declares `streaming_input` + `streaming.emits_partials` +
-  `streaming.re_segments` + `streaming.word_stability`, and whose session yields a
+  `streaming.re_segments` + `streaming.partial_stability`, and whose session yields a
   **scripted** `partial → partial → final`, then a `supersede` that splits/merges
-  segments and re-emits `partial → final`, with growing `stable_until`. This is a
+  segments and re-emits `partial → final`, with growing `stable_text`. This is a
   protocol-level test double (like the cookbook dummy, but for streaming).
 - It is registered via a test-only entry point so the *same* discovery →
   `supports` → `start_transcription` path the app uses in production is exercised
   end to end; the app code never references it.
 
 This yields deterministic, reproducible evidence that `partial`/`final`/
-`supersede`/`stable_until` all render correctly and that corrections appear live.
+`supersede`/`stable_text` all render correctly and that corrections appear live.
 
 For **real audio**, the app runs faster-whisper (cookbook) in **batch** mode
 (spinner fallback) — proving the engine-agnostic batch path and producing a
@@ -346,8 +349,8 @@ correct English transcript + working SRT/VTT export.
 ## 6. Testing strategy
 
 - **Reducer (most important).** `tests/test_engine_view.py` — feed scripted event
-  lists (including every type and the merge/split `supersede` cases and a
-  `stable_until` clamp) into `LiveTranscript.apply` and assert state exactly.
+  lists (including every type, the merge/split `supersede` cases, and the
+  stable-text split) into `LiveTranscript.apply` and assert state exactly.
   Cross-check against the protocol's own `reduce_event` / `StreamReducer`.
 - **End-to-end streaming via the scripted engine.** Discover → create →
   `start_transcription` → drain → assert the final view + `session.result()` +
@@ -364,8 +367,12 @@ correct English transcript + working SRT/VTT export.
 
 - No engine implementation beyond the test scripted double (the repo is an *app*).
 - No persistence/server; export is to local files only.
-- `stable_until` is treated at the codepoint level per spec (grapheme-cluster
-  refinement is a spec SHOULD we surface but don't re-implement).
+- `stable_text` is split from `text` by code points, as the spec requires. The
+  app does not check on its own that the stable text ends between two
+  user-perceived characters. An engine MUST end it there, but the library checks
+  only part of that rule, so a split it misses (for example Thai before SARA AM)
+  shows a broken character at the solid/dim boundary until the stable text grows
+  past it (spec ST.4.2).
 - Multi-channel / diarized streaming display is out of scope (v1 streaming wire is
   mono); the result panel still shows channels if a batch result carries them.
 </invoke>

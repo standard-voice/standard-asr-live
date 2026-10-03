@@ -31,9 +31,9 @@ _KEY = "scripted/demo"
 def _line(seg: SegmentView) -> str:
     """Render one segment view as a plain string with stable/unstable markers.
 
-    The frozen prefix is wrapped in ``[...]`` (the part the engine has frozen and
-    will not change); the unsettled tail follows in ``<...>``. A final/closed
-    segment is shown plain (settled).
+    The stable text is wrapped in ``[...]`` (the part the engine promises not
+    to change while the segment lives); the unsettled tail follows in ``<...>``.
+    A final/closed segment is shown plain (settled).
 
     Args:
         seg: The segment view.

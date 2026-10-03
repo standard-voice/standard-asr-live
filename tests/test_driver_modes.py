@@ -14,18 +14,23 @@ from __future__ import annotations
 import logging
 import threading
 import wave
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
 from standard_asr import (
     RuntimeParams,
     Segment,
+    TranscriptionEvent,
     TranscriptionResult,
+    TranscriptionSession,
     discover_models,
 )
 from standard_asr.contract.capabilities import (
     BatchCapabilities,
     DeclaredCapabilities,
+    FlagCap,
+    StreamingCapabilities,
 )
 from standard_asr.engine import (
     BaseConfig,
@@ -81,7 +86,7 @@ async def test_aiter_chunk_source_sets_stop_on_close(monkeypatch: pytest.MonkeyP
 class _BatchProps(BaseProperties):
     engine_id: str = "fakebatch"
     model_name: str = "x"
-    protocol_version: str = "1.0.0"
+    protocol_version: str = "0.2.0"
     accepted_input: set[InputKind] = {InputKind.ARRAY, InputKind.ENCODED_FILE}
     native_sample_rate: int = 16000
     accepted_sample_rates: list[int] = [16000]
@@ -352,3 +357,90 @@ def test_incremental_drive_delivers_all_events_and_terminates(
     result = session.result()
     assert result is not None
     assert "brown fox jumps" in result.text
+
+
+# --------------------------------------------------------------------------- #
+# Capability binding for an engine that does not derive from EngineBase. An
+# EngineBase engine binds its own sessions, so only an engine like this one
+# shows whether the driver's bind_session_capabilities calls happen at all.
+# --------------------------------------------------------------------------- #
+class _SupersedeSession(TranscriptionSession):
+    """A session that settles one segment, then re-segments it."""
+
+    async def _produce(self) -> AsyncIterator[TranscriptionEvent]:
+        yield TranscriptionEvent.final("seg-0", "hello")
+        yield TranscriptionEvent.supersede(old_ids=["seg-0"], new_ids=["seg-1"])
+        yield TranscriptionEvent.final("seg-1", "hello world")
+
+
+class _PlainStreamingEngine:
+    """A streaming engine that implements the protocol without EngineBase.
+
+    It declares ``re_segments`` unsupported, yet its session sends a
+    ``supersede``.
+    """
+
+    properties = _BatchProps()
+
+    def __init__(self, declared_capabilities: DeclaredCapabilities) -> None:
+        self.declared_capabilities = declared_capabilities
+
+    def supports(self, dot_path: str) -> bool:
+        return self.declared_capabilities.supports(dot_path)
+
+    def start_transcription(self, **_kwargs: object) -> TranscriptionSession:
+        return _SupersedeSession()
+
+
+def _no_re_segments(**axis: FlagCap) -> DeclaredCapabilities:
+    return DeclaredCapabilities(
+        streaming=StreamingCapabilities(re_segments=FlagCap(supported=False)), **axis
+    )
+
+
+@pytest.mark.parametrize("strict", [False, True], ids=["lenient", "strict"])
+@pytest.mark.parametrize(
+    ("capabilities", "use_sync", "mode"),
+    [
+        (_no_re_segments(streaming_input=FlagCap(supported=True)), False, Mode.INCREMENTAL),
+        (_no_re_segments(streaming_input=FlagCap(supported=True)), True, Mode.INCREMENTAL),
+        (_no_re_segments(streaming_output=FlagCap(supported=True)), False, Mode.WHOLE_INPUT),
+    ],
+    ids=["async-incremental", "sync-incremental", "whole-input"],
+)
+def test_drive_binds_capabilities_for_engine_without_engine_base(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capabilities: DeclaredCapabilities,
+    use_sync: bool,
+    mode: Mode,
+    strict: bool,
+) -> None:
+    """Every streaming path checks the session's events against the engine's
+    declared capabilities, and ``--strict-lifecycle`` turns a mismatch into a
+    terminal error.
+
+    A ``supersede`` from an engine that declares ``re_segments`` unsupported is
+    delivered with a ``stream_exceeds_re_segments`` diagnostic, or, in strict
+    mode, replaced by an ``engine_error``.
+    """
+    monkeypatch.setattr(driver_mod, "_chunk_source", lambda cfg, stop: iter([_SILENCE]))
+    cfg = DriveConfig(
+        source=Source.FILE,
+        file_path=str(_write_silence_wav(tmp_path / "c.wav")),
+        plan=ChunkPlan(sample_rate=16000, chunk_ms=100, paced=False),
+        params=RuntimeParams(),
+        use_sync_bridge=use_sync,
+        strict_lifecycle=strict,
+    )
+    session = drive(_PlainStreamingEngine(capabilities), cfg)
+    assert session.mode is mode
+    events = list(session.events)
+    session.close()
+
+    if strict:
+        assert events[-1].type == "error"
+        assert events[-1].code == "engine_error"
+    else:
+        assert events[-1].type == "done"
+        assert "stream_exceeds_re_segments" in {d.code for d in session.diagnostics()}

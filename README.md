@@ -9,8 +9,8 @@ corrections — against _any_ installed [Standard ASR](https://github.com/standa
 protocol. Point it at a microphone or an audio file, pick any compliant ASR
 plugin you have installed, and watch the transcript appear live — interim guesses
 rendered dim, settling into solid finals, with **re-segmentation corrections
-(`supersede`) re-rendering in real time** and the engine's frozen-prefix
-(`stable_until`) drawn right on screen.
+(`supersede`) re-rendering in real time** and the engine's stable text
+(`stable_text`) drawn right on screen.
 
 It depends **only** on the protocol (`standard-asr`) plus UI/audio libraries. It
 never imports a concrete engine — every engine is discovered via entry points.
@@ -24,7 +24,7 @@ https://github.com/user-attachments/assets/528f5545-4c79-4a5b-a7fd-562cbf833938
 │  TRANSCRIPT                                                                   │
 │  the quick                          ← final (solid)                          │
 │  brown fox jumps                    ← final (solid)                          │
-│  Over the lazy[ dog]<...>           ← stable prefix solid, unsettled tail dim│
+│  Over the lazy[ dog]<...>           ← stable text solid, unsettled tail dim  │
 ├─ STATUS ──────────────────────────────┬─ DIAGNOSTICS ────────────────────────┤
 │ events 11 (partial 5, final 4, sup 1) │ no diagnostics                       │
 │ audio 00:04.0   language en           │                                      │
@@ -39,7 +39,7 @@ Real-time ASR is the most fragmented part of the speech ecosystem: some engines
 emit interim text that gets rewritten, some never revise, some re-segment after a
 second pass. Standard ASR unifies all of that into one event protocol
 (`partial` / `final` / `supersede` / `progress` / `done` / `error`) with an
-explicit segment lifecycle and a frozen-prefix stability guarantee. This app is a
+explicit segment lifecycle and a stable-text guarantee. This app is a
 correct, copy-pasteable implementation of the consumer side — the **event → view
 reducer** (`src/standard_asr_live/engine_view.py`) is the heart, and it's pure,
 tiny, and unit-tested.
@@ -58,8 +58,9 @@ tiny, and unit-tested.
   exercising the full live UI without a physical mic. Ctrl-C stops mic capture
   and finalizes the transcript.
 - **The live transcript view.** `partial` text is dim/italic; it promotes to a
-  solid `final`; `supersede` removes the retired segments and re-renders the
-  replacements live; the `stable_until` frozen prefix is drawn distinctly; a
+  solid `final`; `supersede` removes the retired segments, stable text included,
+  and re-renders the replacements live in their place; a partial's stable text
+  (`stable_text`) is drawn distinctly; a
   diagnostics panel streams the session's diagnostics; progress/elapsed/throughput
   update continuously.
 - **Three modes, one app, chosen from capabilities.** Incremental streaming
@@ -179,7 +180,7 @@ does not declare `streaming_input`.
 
 - `engine_view.py` — **the event → view reducer.** Pure, sync, no I/O. Implements
   the spec's canonical `partial`/`final`/`supersede` reduce plus the view state a
-  live UI needs (frozen-prefix boundary, counts, reconnect/error banners). This is
+  live UI needs (stable text, counts, reconnect/error banners). This is
   the file to copy into your own app.
 - `driver.py` — selects incremental / whole-input / batch **from capabilities**
   and pumps events into the reducer (async and `SyncSession` paths).
@@ -203,7 +204,7 @@ uv run ruff check src tests
 
 The most important tests (`tests/test_engine_view.py`) feed scripted event lists
 into the reducer and assert state exactly — including every event type, merge/split
-`supersede`, the frozen-prefix split, and a cross-check against the protocol's own
+`supersede`, the stable-text split, and a cross-check against the protocol's own
 `reduce_event`. `tests/test_streaming_e2e.py` drives the in-repo scripted
 streaming engine through real async **and** `SyncSession` sessions.
 

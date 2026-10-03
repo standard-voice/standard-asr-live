@@ -8,9 +8,9 @@ Pure presentation: it reads a :class:`~standard_asr_live.engine_view.LiveTranscr
 visual grammar mirrors the streaming model:
 
 * **final / closed** segment text -> solid (settled).
-* **partial** segment -> frozen prefix (``text[:stable_until]``) solid; unsettled
-  tail (``text[stable_until:]``) dim + italic. This draws ``stable_until`` -- the
-  frozen-prefix frontier -- literally on screen.
+* **partial** segment -> its stable text (``stable_text``) solid; the rest of
+  ``text`` (that is, ``text`` with ``stable_text`` removed from its start) dim +
+  italic. This draws where the engine's stable text ends literally on screen.
 * a just-**superseded** region -> struck through / dimmed for one frame, so a
   correction is visibly replaced rather than silently swapped.
 """
@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 
 #: Style for settled (final / closed) text.
 _STYLE_FINAL = "bold white"
-#: Style for the frozen prefix of an in-progress partial (settled-but-open).
+#: Style for the stable text of an in-progress partial (settled-but-open).
 _STYLE_STABLE = "cyan"
 #: Style for the unsettled tail of a partial (still changing).
 _STYLE_PARTIAL = "dim italic"
@@ -68,7 +68,7 @@ def render_segment(seg: SegmentView) -> Text:
         return Text(seg.text or " ", style=_STYLE_SUPERSEDED)
     if seg.state in ("final", "closed"):
         return Text(seg.text, style=_STYLE_FINAL)
-    # Open (partial): solid frozen prefix + dim italic unsettled tail.
+    # Open (partial): solid stable text + dim italic unsettled tail.
     line = Text()
     if seg.stable_text:
         line.append(seg.stable_text, style=_STYLE_STABLE)
