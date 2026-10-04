@@ -10,6 +10,21 @@ can re-run every command below from the repo root and reproduce the evidence in
   local monorepo checkout for offline dev; the published `pyproject.toml` pins
   the public git branch).
 
+> **Recorded with an earlier `standard-asr`.** The runs below, and the files in
+> `verification/`, were recorded before the library replaced the count
+> `stable_until` with the string `stable_text`, renamed the capability
+> `streaming.word_stability` to `streaming.partial_stability`, and moved the
+> protocol version to the 0.x line. The recorded output is kept as it was, so it
+> still shows the earlier names, such as `stable_until`, `word_stability`, and
+> protocol version `1.0.0`. The scripted engine now declares protocol `0.2.0`,
+> `streaming.finality_level` mode `final` (only one of its segments gets a
+> `closed` final), and `streaming.timestamps` mode `native_frame_aligned` (its
+> events carry `audio_processed_until`). So `models` now lists it as
+> `mic, partials, corrections, stable-prefix, final`, not `…, closed`. A fresh
+> trace run also shows the final transcript with one space between `the quick`
+> and `brown fox jumps`, not two: the library has since changed how it joins
+> segment texts.
+
 ## 0. Setup (one time)
 
 ```bash
@@ -103,7 +118,7 @@ export**, all through the protocol. The *same app* runs the streaming engine in 
 Neither cookbook engine implements streaming, so corrections are proven against
 the in-repo **scripted streaming engine** (`tests/scripted_engine`), a fully
 compliant `StandardASR` engine declaring `streaming_input` +
-`streaming.emits_partials` + `streaming.re_segments` + `streaming.word_stability`.
+`streaming.emits_partials` + `streaming.re_segments` + `streaming.partial_stability`.
 It is driven through the **real** `discover_models → start_transcription → feed →
 events` path — nothing is faked at the protocol layer.
 
@@ -112,14 +127,14 @@ events` path — nothing is faked at the protocol layer.
 STD_SCRIPTED_STEP_DELAY=0.15 uv run python verification/capture_corrections.py
 ```
 
-**Actual trace** (`verification/correction_trace.txt`; `[frozen]<unsettled>`
-shows the `stable_until` boundary the UI renders):
+**Actual trace** (`verification/correction_trace.txt`; `[stable]<unsettled>`
+shows where the stable text ends, as the UI renders it):
 
 ```
 [01] EVENT partial
   [partial] []<the quik>                         ← interim guess (note the typo)
 [02] EVENT partial
-  [partial] [the ]<quick brown>                  ← frozen prefix grew; typo fixed
+  [partial] [the ]<quick brown>                  ← stable text grew; typo fixed
 [03] EVENT final
   [final ] 'the quick brown fox'                 ← segment settles
 [04] EVENT supersede  old=['seg-0'] -> new=['seg-1', 'seg-2']
@@ -150,7 +165,7 @@ counts                    : {'partial': 5, 'final': 4, 'supersede': 1, ...}
 
 This proves every must-have: **interim partials render, promote to finals, and a
 `supersede` re-renders the correction live** (seg-0 removed, seg-1+seg-2 stream
-in), the **frozen prefix** (`stable_until`) is drawn, a **`closed`** final
+in), the **stable text** (`stable_text`) is drawn, a **`closed`** final
 **replaces** (not appends) post-processed text, and a **recoverable error** is
 survived.
 
@@ -201,7 +216,7 @@ Result: **60 passed**, 77% line coverage overall — the event→view reducer
 (`engine_view.py`) is at **97%** and the renderer (`view.py`) at 95%. The reducer
 tests (`tests/test_engine_view.py`, 17 cases) feed scripted event lists and
 assert state exactly, including every event type, merge/split `supersede`, the
-frozen-prefix split, and a cross-check against the protocol's own
+stable-text split, and a cross-check against the protocol's own
 `reduce_event`. `tests/test_streaming_e2e.py` drives the scripted engine through
 real async **and** `SyncSession` sessions.
 

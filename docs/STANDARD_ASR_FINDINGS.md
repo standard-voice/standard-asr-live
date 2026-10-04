@@ -14,6 +14,14 @@ in §A at the end.
 Severity legend: **[blocker]** stops you, **[friction]** costs real time,
 **[papercut]** minor annoyance, **[doc]** documentation gap.
 
+> **These findings describe the library as it was then.** Some names have
+> changed since. `stable_until` is gone: a `partial` or `final` event now carries
+> its stable text as the string field `stable_text`. The capability
+> `streaming.word_stability` is now `streaming.partial_stability`. The diagnostic
+> code `frozen_prefix_rewritten_supersede` is removed: a `supersede` now withdraws
+> the retired segments together with their stable text, and the library
+> compares no text across it.
+
 ---
 
 ## 1. [friction] No canonical wire-encoding constant; apps hardcode `"pcm_s16le"`

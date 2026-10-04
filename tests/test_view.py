@@ -4,7 +4,7 @@
 """Tests for the rich rendering of reducer state (the visual grammar).
 
 These assert the styling decisions that make the streaming model legible:
-partials dim, finals solid, the frozen prefix distinct, superseded text struck
+partials dim, finals solid, the stable text distinct, superseded text struck
 through. We render to a string-capturing console and check the styled spans.
 """
 
@@ -40,18 +40,18 @@ def _plain(renderable) -> str:
 
 def test_final_segment_renders_solid_text() -> None:
     """A final segment renders its full text plainly (settled)."""
-    seg = SegmentView(segment_id="s0", text="hello world", stable_until=11, state="final")
+    seg = SegmentView(segment_id="s0", text="hello world", stable_text="hello world", state="final")
     text = render_segment(seg)
     assert text.plain == "hello world"
 
 
 def test_partial_segment_splits_stable_and_unstable() -> None:
-    """A partial renders the frozen prefix then the unsettled tail."""
-    seg = SegmentView(segment_id="s0", text="the quick brown", stable_until=4, state="open")
+    """A partial renders the stable text then the unsettled tail."""
+    seg = SegmentView(segment_id="s0", text="the quick brown", stable_text="the ", state="open")
     text = render_segment(seg)
     # The plain text is the whole segment; styling differs per span.
     assert text.plain == "the quick brown"
-    # The first span is the frozen prefix; the rest is the unstable tail.
+    # The first span is the stable text; the rest is the unstable tail.
     spans = text.spans
     assert spans, "expected styled spans for stable/unstable split"
 
@@ -72,8 +72,8 @@ def test_transcript_panel_shows_listening_when_empty() -> None:
 def test_transcript_panel_renders_segments() -> None:
     """The transcript panel shows committed and in-progress segments."""
     state = LiveTranscript()
-    state.apply(TranscriptionEvent.final("s0", "hello world", stable_until=11))
-    state.apply(TranscriptionEvent.partial("s1", "in progress", stable_until=0))
+    state.apply(TranscriptionEvent.final("s0", "hello world"))
+    state.apply(TranscriptionEvent.partial("s1", "in progress"))
     out = _plain(render_transcript(state))
     assert "hello world" in out
     assert "in progress" in out
@@ -85,7 +85,7 @@ def test_transcript_panel_bounds_to_tail_when_capped() -> None:
     growth that made the live view stack and overflow the terminal."""
     state = LiveTranscript()
     for i in range(40):
-        state.apply(TranscriptionEvent.final(f"s{i}", f"line {i}", stable_until=0))
+        state.apply(TranscriptionEvent.final(f"s{i}", f"line {i}"))
     out = _plain(render_transcript(state, max_lines=5))
     assert "line 39" in out  # newest is kept
     assert "line 0" not in out  # oldest is dropped
@@ -97,7 +97,7 @@ def test_transcript_panel_unbounded_when_no_cap() -> None:
     """Without max_lines the panel shows every line (small transcripts are intact)."""
     state = LiveTranscript()
     for i in range(3):
-        state.apply(TranscriptionEvent.final(f"s{i}", f"line {i}", stable_until=0))
+        state.apply(TranscriptionEvent.final(f"s{i}", f"line {i}"))
     out = _plain(render_transcript(state))
     assert "line 0" in out and "line 2" in out
     assert "earlier line" not in out
@@ -106,7 +106,7 @@ def test_transcript_panel_unbounded_when_no_cap() -> None:
 def test_status_panel_shows_counts_and_language() -> None:
     """The status panel reports engine, mode, counts, and language."""
     state = LiveTranscript()
-    state.apply(TranscriptionEvent.final("s0", "hi", stable_until=0, detected_language="en"))
+    state.apply(TranscriptionEvent.final("s0", "hi", detected_language="en"))
     out = _plain(render_status(state, elapsed=3.0, mode="incremental", engine_key="x/y"))
     assert "x/y" in out
     assert "incremental" in out
@@ -124,9 +124,9 @@ def test_status_panel_shows_reconnect() -> None:
 def test_diagnostics_panel_empty_and_populated() -> None:
     """The diagnostics panel handles the empty and populated cases."""
     assert "no diagnostics" in _plain(render_diagnostics([]))
-    diag = Diagnostic(level="warning", code="stable_until_clamped", message="clamped")
+    diag = Diagnostic(level="warning", code="stable_text_clamped", message="clamped")
     out = _plain(render_diagnostics([diag]))
-    assert "stable_until_clamped" in out
+    assert "stable_text_clamped" in out
     assert "clamped" in out
 
 

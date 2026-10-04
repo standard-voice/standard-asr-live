@@ -6,22 +6,23 @@
 :class:`LiveTranscript` folds a stream of :class:`~standard_asr.TranscriptionEvent`
 objects into the state the terminal renders. It is the canonical application-side
 reduce from the spec (section "Streaming", ST.5.2) -- ``partial`` shows,
-``final`` commits, and **``supersede`` removes the retired segments and lets the
-replacements render as they arrive** -- extended with the view-only bookkeeping a
-live UI needs (a frozen-prefix boundary to draw, per-type counts, a reconnect
-banner, a recoverable-error log, the terminal event).
+``final`` commits, and **``supersede`` removes the retired segments, stable text
+included, and puts the replacements in their place, rendering them as they
+arrive** -- extended with the view-only bookkeeping a live UI needs (the stable
+text to draw, per-type counts, a reconnect banner, a recoverable-error log, the
+terminal event).
 
 It is deliberately **pure and framework-free**: no async, no I/O, no ``rich``. A
 ``TranscriptionEvent`` goes in via :meth:`LiveTranscript.apply`; render state
 comes out. That makes the single most important behaviour -- correct handling of
-every event type, especially ``supersede`` corrections and the monotonic
-``stable_until`` frozen prefix -- deterministically unit-testable against a
-scripted event list, with no engine, microphone, or terminal in the loop.
+every event type, especially ``supersede`` corrections and each segment's
+growing stable text -- deterministically unit-testable against a scripted event
+list, with no engine, microphone, or terminal in the loop.
 
 Why keep our own view state instead of only calling ``session.result()``? The
 reduced :class:`~standard_asr.TranscriptionResult` contains only *committed*
-``final`` segments -- it has no in-progress ``partial`` text and no frozen-prefix
-boundary. The live screen needs both. So the app keeps this view state for the
+``final`` segments -- it has no in-progress ``partial`` text and no stable text
+of a ``partial``. The live screen needs both. So the app keeps this view state for the
 display and uses ``session.result()`` for the authoritative final transcript and
 export; the two are reconciled at ``done`` (see :meth:`committed_text`).
 """
@@ -47,8 +48,10 @@ class SegmentView:
         segment_id: The segment's stable id.
         text: The segment's complete current text (cumulative/replace -- always
             the full text, never a delta; spec ST.4.3).
-        stable_until: Frozen-prefix length in codepoints; ``text[:stable_until]``
-            is the part the engine has frozen and will not change (spec ST.4.2).
+        stable_text: The start of ``text`` that the engine promises not to
+            change while the segment lives, taken from the event's
+            ``stable_text`` (spec ST.4.2). ``""`` when nothing is stable yet; the
+            whole text once the segment is final.
         state: Lifecycle as the UI sees it (``open`` / ``final`` / ``closed``).
         start: Segment start time in seconds (origin = first session sample).
         end: Segment end time in seconds.
@@ -60,33 +63,27 @@ class SegmentView:
 
     segment_id: str
     text: str = ""
-    stable_until: int = 0
+    stable_text: str = ""
     state: SegmentState = "open"
     start: float | None = None
     end: float | None = None
     just_superseded: bool = False
 
     @property
-    def stable_text(self) -> str:
-        """The frozen prefix ``text[:stable_until]`` (defensively bounded).
-
-        Returns:
-            The frozen prefix, or ``""`` if nothing is validly frozen.
-        """
-        if self.stable_until <= 0:
-            return ""
-        return self.text[: self.stable_until]
-
-    @property
     def unstable_text(self) -> str:
-        """The not-yet-frozen tail ``text[stable_until:]``.
+        """The rest of ``text`` after ``stable_text``: the part that may still change.
+
+        It is ``text`` with exactly the code points of ``stable_text`` removed
+        from its start. Python indexes a ``str`` by code point, so slicing by
+        ``len(stable_text)`` removes exactly those code points.
 
         Returns:
-            The unstable suffix of the segment text.
+            The text after the stable text, or the whole text if ``text`` does
+            not start with ``stable_text`` (a validated event never does that).
         """
-        if self.stable_until <= 0:
+        if not self.text.startswith(self.stable_text):
             return self.text
-        return self.text[self.stable_until :]
+        return self.text[len(self.stable_text) :]
 
 
 @dataclass
@@ -97,7 +94,10 @@ class LiveTranscript:
     fields / helpers. Holds no engine, audio, or terminal reference.
 
     Args:
-        order: Live segment ids in arrival (reading) order.
+        order: Live segment ids in reading order. It also holds the ids a
+            ``supersede`` placed in the retired block's position before their
+            first ``partial`` / ``final`` arrives; those have no entry in
+            ``segments`` yet.
         segments: Map of segment id to its :class:`SegmentView`.
         retired: Segments just retired by a ``supersede``, kept for one render so
             the correction can be highlighted, then dropped on the next
@@ -132,8 +132,8 @@ class LiveTranscript:
         """Fold one event into the view state (the canonical reduce, ST.5.2).
 
         Mirrors the spec's required application reduce exactly, plus view-only
-        bookkeeping (counts, frozen-prefix boundary, reconnect/error banners,
-        terminal capture). Every compliant app MUST implement the ``partial`` /
+        bookkeeping (counts, stable text, reconnect/error banners, terminal
+        capture). Every compliant app MUST implement the ``partial`` /
         ``final`` / ``supersede`` branches; the rest drive the UI.
 
         Args:
@@ -172,7 +172,7 @@ class LiveTranscript:
         assert event.segment_id is not None  # protocol guarantees it for partial
         seg = self._upsert(event.segment_id)
         seg.text = event.text or ""
-        seg.stable_until = self._bounded_stable_until(event, seg)
+        seg.stable_text = self._stable_text(event, seg)
         seg.state = "open"
         self._set_times(seg, event)
 
@@ -186,27 +186,39 @@ class LiveTranscript:
         assert event.segment_id is not None  # protocol guarantees it for final
         seg = self._upsert(event.segment_id)
         seg.text = event.text or ""
-        seg.stable_until = self._bounded_stable_until(event, seg)
+        seg.stable_text = self._stable_text(event, seg)
         seg.state = "closed" if event.finality == "closed" else "final"
         self._set_times(seg, event)
 
     def _apply_supersede(self, event: TranscriptionEvent) -> None:
         """Replace a group of old segments with new ones (the must-have).
 
-        The retired ``old_ids`` are removed from the live view (and stashed in
-        :attr:`retired` for a one-frame highlight). The ``new_ids`` segments are
-        NOT created here -- they arrive via their own ``partial`` / ``final``
-        events, which is exactly when the reducer renders the correction live.
+        The supersede withdraws the retired ``old_ids``, stable text included:
+        they are removed from the live view (and stashed in :attr:`retired` for
+        a one-frame highlight). The ``new_ids`` take the retired block's place
+        in the reading order, as the spec's core reduce requires (ST.5.2). Their
+        views are NOT created here -- they arrive via their own ``partial`` /
+        ``final`` events, with their own stable text, which is exactly when the
+        reducer renders the correction live.
         """
+        position: int | None = None
         for old_id in event.old_ids:
             seg = self.segments.pop(old_id, None)
             if seg is not None:
                 seg.just_superseded = True
                 self.retired.append(seg)
-                if old_id in self.order:
-                    self.order.remove(old_id)
-        # new_ids intentionally not pre-created: their first partial/final upserts
-        # them, so the new text streams in visibly rather than popping in blank.
+            if old_id in self.order:
+                if position is None:
+                    position = self.order.index(old_id)
+                self.order.remove(old_id)
+        if position is None:
+            # No retired id was in the reading order (defensive: a compliant
+            # stream never retires an id it has not announced). The new segments
+            # then claim their place at their first partial/final, like any new one.
+            return
+        self.order[position:position] = [
+            new_id for new_id in event.new_ids if new_id not in self.order
+        ]
 
     def _apply_progress(self, event: TranscriptionEvent) -> None:
         """Advance the cursor; surface a reconnect banner if this is one."""
@@ -245,29 +257,32 @@ class LiveTranscript:
         if seg is None:
             seg = SegmentView(segment_id=segment_id)
             self.segments[segment_id] = seg
-            self.order.append(segment_id)
+            if segment_id not in self.order:  # a supersede may have placed it
+                self.order.append(segment_id)
         return seg
 
     @staticmethod
-    def _bounded_stable_until(event: TranscriptionEvent, seg: SegmentView) -> int:
-        """Clamp ``stable_until`` to a valid codepoint prefix of the text.
+    def _stable_text(event: TranscriptionEvent, seg: SegmentView) -> str:
+        """Return the event's stable text, as long as ``text`` starts with it.
 
-        The protocol already guards monotonicity and the combining-character
-        boundary at the session layer, and rejects an out-of-range value at event
-        construction. This is a thin defensive bound for the renderer so a None
-        (engine reported no frozen prefix) becomes ``0`` and the value can never
-        index past the text.
+        The protocol already rejects, at event construction, a stable text that
+        is not the start of ``text``, and the session guards growth and the
+        combining-character boundary. This is a thin defensive check for the
+        renderer, so the stable text it draws is always the start of the
+        segment text.
 
         Args:
             event: The partial/final event.
             seg: The segment view being updated (carries the new ``text``).
 
         Returns:
-            A frozen-prefix length in ``[0, len(text)]``.
+            The event's ``stable_text``, or ``""`` if it is missing or is not
+            the start of the segment text.
         """
-        if event.stable_until is None:
-            return 0
-        return max(0, min(event.stable_until, len(seg.text)))
+        stable = event.stable_text or ""
+        if not seg.text.startswith(stable):
+            return ""
+        return stable
 
     @staticmethod
     def _set_times(seg: SegmentView, event: TranscriptionEvent) -> None:
@@ -302,9 +317,10 @@ class LiveTranscript:
         """Return the live segments in reading order (excludes retired).
 
         Returns:
-            The current segment views, ordered as they should be displayed.
+            The current segment views, ordered as they should be displayed. A
+            replacement id that has no ``partial`` / ``final`` yet is left out.
         """
-        return [self.segments[sid] for sid in self.order]
+        return [self.segments[sid] for sid in self.order if sid in self.segments]
 
     def committed_text(self) -> str:
         """Return the joined text of committed (``final`` / ``closed``) segments.
@@ -317,9 +333,7 @@ class LiveTranscript:
             The committed segments' text joined by single spaces.
         """
         parts = [
-            self.segments[sid].text.strip()
-            for sid in self.order
-            if self.segments[sid].state in ("final", "closed")
+            seg.text.strip() for seg in self.live_segments() if seg.state in ("final", "closed")
         ]
         return " ".join(p for p in parts if p).strip()
 

@@ -9,7 +9,7 @@ rendering is correct against the *real* protocol types, this module provides a
 streaming engine whose session yields a **deterministic, scripted** event
 sequence exercising every behaviour the live UI must handle:
 
-    partial -> partial -> final        (segment settles, stable_until grows)
+    partial -> partial -> final        (segment settles, stable_text grows)
     supersede (split one final into two new segments)
     partial -> final (each new segment)
     a recoverable error (content_lost-style) that the UI must survive
@@ -40,6 +40,7 @@ from standard_asr.contract.capabilities import (
     FlagCap,
     LanguageCaps,
     StreamingCapabilities,
+    StreamTimestampsCap,
 )
 from standard_asr.engine import (
     BaseConfig,
@@ -69,7 +70,7 @@ class ScriptedProperties(BaseProperties):
 
     engine_id: str = "scripted"
     model_name: str = "demo"
-    protocol_version: str = "1.0.0"
+    protocol_version: str = "0.2.0"
     accepted_input: set[InputKind] = {InputKind.ARRAY}
     native_sample_rate: int = 16000
     accepted_sample_rates: list[int] = [16000]
@@ -80,15 +81,21 @@ class ScriptedProperties(BaseProperties):
     description: str | None = "Scripted streaming engine emitting partial/final/supersede."
 
 
-#: A streaming engine declaring partials, re-segmentation (supersede) and a
-#: meaningful stable_until -- exactly the capabilities the live UI gates on.
+#: A streaming engine declaring partials, re-segmentation (supersede) and
+#: stable text on partials -- exactly the capabilities the live UI gates on.
+#: The declaration matches what the script below sends: every event but the
+#: recoverable error carries ``audio_processed_until`` and the finals carry
+#: start and end times, so ``timestamps`` is not ``none``; only ``seg-3`` gets
+#: a ``closed`` final, so ``finality_level`` is ``final``, which still allows
+#: that one ``closed``.
 _CAPABILITIES = DeclaredCapabilities(
     streaming=StreamingCapabilities(
         language=LanguageCaps(runtime_override=FlagCap(supported=True)),
         emits_partials=FlagCap(supported=True),
         re_segments=FlagCap(supported=True),
-        word_stability=FlagCap(supported=True),
-        finality_level=FinalityCap(mode="closed"),
+        partial_stability=FlagCap(supported=True),
+        finality_level=FinalityCap(mode="final"),
+        timestamps=StreamTimestampsCap(mode="native_frame_aligned"),
     ),
     streaming_input=FlagCap(supported=True),
     streaming_output=FlagCap(supported=True),
@@ -99,59 +106,58 @@ _CAPABILITIES = DeclaredCapabilities(
 def _script() -> list[TranscriptionEvent]:
     """Return the deterministic scripted event list.
 
-    The sequence settles one segment (with a growing frozen prefix), then
+    The sequence settles one segment (with growing stable text), then
     ``supersede``s it into two segments that each settle, then emits a
     recoverable error, then ``done``. Every text is the full cumulative segment
-    text (never a delta), and ``stable_until`` only ever grows per segment.
+    text (never a delta), and ``stable_text`` only ever grows per segment.
 
-    The frozen-prefix arithmetic is deliberately spec-correct so the protocol's
-    ``_LifecycleGuard`` admits every event with no suppression (spec ST.5.2: a
-    supersede MUST preserve the concatenated frozen prefix of the retired
-    segments). The retired ``seg-0`` freezes ``"the quick brown "`` (16
-    codepoints, with the trailing space); the split's replacements re-freeze the
-    SAME concatenation -- ``seg-1`` freezes ``"the quick "`` (10) and ``seg-2``
-    freezes ``"brown "`` (6), so ``F_new == F_old``.
+    The stable text follows the protocol's rules, so the session's
+    ``_LifecycleGuard`` admits every event with no suppression. The
+    ``supersede`` withdraws ``seg-0`` together with its stable text (spec,
+    streaming section 5.2). Nothing compares the replacements' text with the
+    retired segment's: ``seg-1`` and ``seg-2`` are new segments, and each
+    one's stable text starts from ``""``.
 
     Returns:
         The scripted events, in delivery order.
     """
     return [
-        # Segment seg-0: best guess grows; frozen prefix advances 0 -> 4 -> 16.
-        # "the " is frozen at su=4, then "the quick brown " (16) at the final.
-        TranscriptionEvent.partial("seg-0", "the quik", stable_until=0, audio_processed_until=0.5),
+        # Segment seg-0: best guess grows; stable text advances "" -> "the "
+        # -> the whole text at the final (a final is stable as a whole).
+        TranscriptionEvent.partial("seg-0", "the quik", audio_processed_until=0.5),
         TranscriptionEvent.partial(
-            "seg-0", "the quick brown", stable_until=4, audio_processed_until=1.0
+            "seg-0", "the quick brown", stable_text="the ", audio_processed_until=1.0
         ),
         TranscriptionEvent.final(
             "seg-0",
             "the quick brown fox",
-            stable_until=16,  # "the quick brown " (incl. trailing space)
             start=0.0,
             end=2.0,
             audio_processed_until=2.0,
         ),
         # Re-segmentation: split seg-0 into seg-1 + seg-2 (a two-pass rescoring
-        # style correction). The concatenated frozen prefix MUST be preserved:
-        # F_old = "the quick brown " (16). The replacements below re-freeze it.
+        # style correction). The supersede withdraws seg-0 together with its
+        # stable text; seg-1 and seg-2 are new segments whose stable text
+        # starts from "" and grows on its own.
         TranscriptionEvent.supersede(
             old_ids=["seg-0"], new_ids=["seg-1", "seg-2"], audio_processed_until=2.0
         ),
-        TranscriptionEvent.partial("seg-1", "the quick", stable_until=4, audio_processed_until=2.2),
+        TranscriptionEvent.partial(
+            "seg-1", "the quick", stable_text="the ", audio_processed_until=2.2
+        ),
         TranscriptionEvent.final(
             "seg-1",
             "the quick ",
-            stable_until=10,  # "the quick " (incl. trailing space) -> F_new part 1
             start=0.0,
             end=1.0,
             audio_processed_until=2.5,
         ),
         TranscriptionEvent.partial(
-            "seg-2", "brown fox", stable_until=6, audio_processed_until=2.6
+            "seg-2", "brown fox", stable_text="brown ", audio_processed_until=2.6
         ),
         TranscriptionEvent.final(
             "seg-2",
             "brown fox jumps",
-            stable_until=15,  # full text; first 6 ("brown ") completes F_new == F_old
             start=1.0,
             end=2.5,
             audio_processed_until=2.8,
@@ -160,12 +166,11 @@ def _script() -> list[TranscriptionEvent]:
         # A second segment arrives normally and is post-processed (closed adds
         # punctuation / capitalization -- the UI must REPLACE, not append).
         TranscriptionEvent.partial(
-            "seg-3", "over the lazy dog", stable_until=8, audio_processed_until=3.5
+            "seg-3", "over the lazy dog", stable_text="over the", audio_processed_until=3.5
         ),
         TranscriptionEvent.closed(
             "seg-3",
             "Over the lazy dog.",
-            stable_until=18,
             start=2.5,
             end=4.0,
             audio_processed_until=4.0,
