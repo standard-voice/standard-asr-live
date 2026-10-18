@@ -118,6 +118,10 @@ def _script() -> list[TranscriptionEvent]:
     retired segment's: ``seg-1`` and ``seg-2`` are new segments, and each
     one's stable text starts from ``""``.
 
+    Each segment text carries the space that joins it to its neighbors (spec
+    TR.1): ``seg-1`` ends with one and ``seg-3`` starts with one, so the
+    reduced transcript is ``"the quick brown fox jumps Over the lazy dog."``.
+
     Returns:
         The scripted events, in delivery order.
     """
@@ -166,11 +170,11 @@ def _script() -> list[TranscriptionEvent]:
         # A second segment arrives normally and is post-processed (closed adds
         # punctuation / capitalization -- the UI must REPLACE, not append).
         TranscriptionEvent.partial(
-            "seg-3", "over the lazy dog", stable_text="over the", audio_processed_until=3.5
+            "seg-3", " over the lazy dog", stable_text=" over the", audio_processed_until=3.5
         ),
         TranscriptionEvent.closed(
             "seg-3",
-            "Over the lazy dog.",
+            " Over the lazy dog.",
             start=2.5,
             end=4.0,
             audio_processed_until=4.0,

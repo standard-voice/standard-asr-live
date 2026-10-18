@@ -62,17 +62,27 @@ def render_segment(seg: SegmentView) -> Text:
         seg: The segment view to render.
 
     Returns:
-        A styled :class:`rich.text.Text` line for the segment.
+        A styled :class:`rich.text.Text` line for the segment, without the
+        segment's leading whitespace.
     """
+    # Display only: each segment is drawn on a line of its own, so the space
+    # that joins a segment to the one before it (spec TR.1; the Whisper family
+    # starts every segment with one) would land at the line's left edge as a
+    # one-column indent. Drop leading whitespace here, at the line edge, and
+    # nowhere else: seg.text, committed_text() and the result keep it. Every
+    # state strips the same way, so a line does not shift when it finalizes.
     if seg.just_superseded:
-        return Text(seg.text or " ", style=_STYLE_SUPERSEDED)
+        return Text(seg.text.lstrip() or " ", style=_STYLE_SUPERSEDED)
     if seg.state in ("final", "closed"):
-        return Text(seg.text, style=_STYLE_FINAL)
-    # Open (partial): solid stable text + dim italic unsettled tail.
+        return Text(seg.text.lstrip(), style=_STYLE_FINAL)
+    # Open (partial): solid stable text + dim italic unsettled tail. The tail
+    # starts the line only when the stable text is empty or all whitespace.
+    stable = seg.stable_text.lstrip()
+    unstable = seg.unstable_text if stable else seg.unstable_text.lstrip()
     line = Text()
-    if seg.stable_text:
-        line.append(seg.stable_text, style=_STYLE_STABLE)
-    line.append(seg.unstable_text, style=_STYLE_PARTIAL)
+    if stable:
+        line.append(stable, style=_STYLE_STABLE)
+    line.append(unstable, style=_STYLE_PARTIAL)
     return line
 
 
@@ -95,6 +105,8 @@ def render_transcript(state: LiveTranscript, *, max_lines: int | None = None) ->
     # complex; instead show them as a trailing "corrected" strip for one frame.
     for seg in state.live_segments():
         rendered = render_segment(seg)
+        # Display only: a segment that is all whitespace would draw a blank
+        # line, so it gets no line of its own. Its text stays in the state.
         if rendered.plain.strip():
             lines.append(rendered)
     for retired in state.retired:

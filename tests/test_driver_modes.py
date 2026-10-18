@@ -118,7 +118,7 @@ class _BatchEngine(EngineBase):
             duration=2.0,
             segments=[
                 Segment(start=0.0, end=1.0, text="hello"),
-                Segment(start=1.0, end=2.0, text="world"),
+                Segment(start=1.0, end=2.0, text=" world"),
             ],
         )
 

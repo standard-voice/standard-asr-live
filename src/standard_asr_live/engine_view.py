@@ -323,19 +323,21 @@ class LiveTranscript:
         return [self.segments[sid] for sid in self.order if sid in self.segments]
 
     def committed_text(self) -> str:
-        """Return the joined text of committed (``final`` / ``closed``) segments.
+        """Return the texts of the committed (``final`` / ``closed``) segments, concatenated.
 
         This is the view's notion of the final transcript, used to cross-check
         against the authoritative ``session.result().text`` at ``done``. Open
         (still-``partial``) segments are excluded -- they are not committed yet.
 
+        Each segment text carries the spaces and punctuation that join it to
+        its neighbors (spec TR.1), so the texts are concatenated in reading
+        order exactly as the engine sent them: no separator is added and no
+        whitespace is stripped, the way ``session.result()`` builds its text.
+
         Returns:
-            The committed segments' text joined by single spaces.
+            ``"".join`` of the committed segments' texts, in reading order.
         """
-        parts = [
-            seg.text.strip() for seg in self.live_segments() if seg.state in ("final", "closed")
-        ]
-        return " ".join(p for p in parts if p).strip()
+        return "".join(seg.text for seg in self.live_segments() if seg.state in ("final", "closed"))
 
     def is_finished(self) -> bool:
         """Whether a terminal event has ended the session.

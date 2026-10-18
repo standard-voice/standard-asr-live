@@ -20,7 +20,13 @@ Severity legend: **[blocker]** stops you, **[friction]** costs real time,
 > `streaming.word_stability` is now `streaming.partial_stability`. The diagnostic
 > code `frozen_prefix_rewritten_supersede` is removed: a `supersede` now withdraws
 > the retired segments together with their stable text, and the library
-> compares no text across it.
+> compares no text across it. Findings 4 and 10 no longer apply, and the fix
+> finding 4 suggests is the opposite of the rule now in force: a segment's
+> `text` carries the spaces that join it to its neighbors, and the library
+> and every application concatenate segment texts with no separator and no
+> stripping (spec TR.1). So `"the quick "` followed by `"brown fox"` gives
+> `"the quick brown fox"`, and the app's `committed_text()` equals
+> `session.result().text` once every segment is committed.
 
 ---
 

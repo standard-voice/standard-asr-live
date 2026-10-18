@@ -830,7 +830,10 @@ def _finish(
         summary = Table.grid(padding=(0, 1))
         summary.add_column(style="dim", justify="right")
         summary.add_column()
-        summary.add_row("transcript", result.text or "(empty)")
+        # Display only: the transcript starts and ends a table cell, so edge
+        # whitespace (the Whisper family's text starts with a space, spec TR.1)
+        # is stripped for the screen. The export below writes result.text as is.
+        summary.add_row("transcript", result.text.strip() or "(empty)")
         summary.add_row("language", result.detected_language or "—")
         summary.add_row(
             "duration", f"{result.duration:.2f}s" if result.duration is not None else "—"
