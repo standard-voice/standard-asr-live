@@ -20,13 +20,18 @@ Severity legend: **[blocker]** stops you, **[friction]** costs real time,
 > `streaming.word_stability` is now `streaming.partial_stability`. The diagnostic
 > code `frozen_prefix_rewritten_supersede` is removed: a `supersede` now withdraws
 > the retired segments together with their stable text, and the library
-> compares no text across it. Findings 4 and 10 no longer apply, and the fix
-> finding 4 suggests is the opposite of the rule now in force: a segment's
-> `text` carries the spaces that join it to its neighbors, and the library
-> and every application concatenate segment texts with no separator and no
-> stripping (spec TR.1). So `"the quick "` followed by `"brown fox"` gives
-> `"the quick brown fox"`, and the app's `committed_text()` equals
-> `session.result().text` once every segment is committed.
+> compares no text across it. Findings 4 and 10 no longer apply. The fix
+> finding 4 suggests is the opposite of the rule this app follows. That rule
+> is spec TR.1 as written in standard-voice/standard_asr#117, which is open.
+> A segment's `text` carries the spaces that join it to its neighbors. The
+> library and every application concatenate segment texts with no separator
+> and no stripping. So `"the quick "` followed by `"brown fox"` gives
+> `"the quick brown fox"`. Against that branch, the app's `committed_text()`
+> equals `session.result().text` once every segment is committed. The core
+> pinned in `uv.lock` (rev `97bfdb2`, on the core's `main`) does not have
+> that rule yet. It strips each segment's text and joins the segments with
+> one space (`runtime/streaming.py:1237` at that rev), so there the two can
+> differ. The lock is bumped after #117 merges.
 
 ---
 

@@ -105,8 +105,11 @@ def render_transcript(state: LiveTranscript, *, max_lines: int | None = None) ->
     # complex; instead show them as a trailing "corrected" strip for one frame.
     for seg in state.live_segments():
         rendered = render_segment(seg)
-        # Display only: a segment that is all whitespace would draw a blank
-        # line, so it gets no line of its own. Its text stays in the state.
+        # Display only: a live segment that is all whitespace would draw a
+        # blank line, so it gets no line of its own. Its text stays in the
+        # state. The retired segments below skip this filter, so a
+        # whitespace-only one draws a blank struck line (render_segment()
+        # gives it a single space).
         if rendered.plain.strip():
             lines.append(rendered)
     for retired in state.retired:
