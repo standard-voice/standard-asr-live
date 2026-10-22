@@ -182,7 +182,7 @@ def test_supersede_places_replacements_where_the_retired_block_was() -> None:
     state = _drive(
         [
             TranscriptionEvent.final("a", "hi"),
-            TranscriptionEvent.final("b", "world"),
+            TranscriptionEvent.final("b", " world"),
             TranscriptionEvent.supersede(old_ids=["a"], new_ids=["a2"]),
             TranscriptionEvent.final("a2", "HI"),
         ]
@@ -268,6 +268,20 @@ def test_committed_text_excludes_open_partials() -> None:
         ]
     )
     assert state.committed_text() == "first"
+
+
+def test_committed_text_concatenates_segment_texts_as_sent() -> None:
+    """committed_text() adds no separator and strips no whitespace (spec TR.1)."""
+    state = _drive(
+        [
+            TranscriptionEvent.final("s0", " Hello"),
+            TranscriptionEvent.final("s1", ","),
+            TranscriptionEvent.final("s2", " world."),
+            TranscriptionEvent.final("s3", "今天"),
+            TranscriptionEvent.final("s4", "天气 "),
+        ]
+    )
+    assert state.committed_text() == " Hello, world.今天天气 "
 
 
 def test_matches_protocol_reduce_for_committed_map() -> None:

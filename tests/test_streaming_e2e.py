@@ -65,9 +65,11 @@ async def test_async_session_drives_reducer_to_correct_result() -> None:
     # The committed segments are exactly the post-supersede ones.
     ids = [s.segment_id for s in state.live_segments()]
     assert ids == ["seg-1", "seg-2", "seg-3"]
-    # The authoritative result text contains the corrected transcript.
-    assert "brown fox jumps" in result.text
-    assert "Over the lazy dog." in result.text
+    # The authoritative result text is the corrected transcript: the segment
+    # texts concatenated as sent (spec TR.1), and the view's committed text
+    # agrees with it exactly.
+    assert result.text == "the quick brown fox jumps Over the lazy dog."
+    assert state.committed_text() == result.text
     # A fully spec-compliant script produces no suppression diagnostics, and,
     # since the session checks every event against the engine's declared
     # streaming capabilities, no capability diagnostic either.

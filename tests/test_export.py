@@ -26,7 +26,7 @@ def _result() -> TranscriptionResult:
         duration=4.0,
         segments=[
             Segment(start=0.0, end=2.0, text="Hello world."),
-            Segment(start=2.0, end=4.0, text="The quick brown fox."),
+            Segment(start=2.0, end=4.0, text=" The quick brown fox."),
         ],
     )
 

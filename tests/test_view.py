@@ -56,6 +56,32 @@ def test_partial_segment_splits_stable_and_unstable() -> None:
     assert spans, "expected styled spans for stable/unstable split"
 
 
+def test_segment_line_drops_leading_space_for_display_only() -> None:
+    """A segment's leading space is not drawn at the line edge; its text keeps it."""
+    final = SegmentView(segment_id="s0", text=" Hello world.", state="final")
+    assert render_segment(final).plain == "Hello world."
+    assert final.text == " Hello world."
+
+    struck = SegmentView(segment_id="s0", text=" old", state="final", just_superseded=True)
+    assert render_segment(struck).plain == "old"
+
+
+def test_partial_line_drops_leading_space_and_keeps_the_split() -> None:
+    """A partial strips the line edge the same way and keeps stable then tail."""
+    seg = SegmentView(segment_id="s0", text=" the quick", stable_text=" the ", state="open")
+    text = render_segment(seg)
+    assert text.plain == "the quick"
+    assert [text.plain[span.start : span.end] for span in text.spans] == ["the ", "quick"]
+
+    # With only whitespace stable, the tail starts the line and is stripped.
+    seg = SegmentView(segment_id="s0", text=" quick", stable_text=" ", state="open")
+    assert render_segment(seg).plain == "quick"
+
+    # Nothing stable: the tail starts the line.
+    seg = SegmentView(segment_id="s0", text=" quick", stable_text="", state="open")
+    assert render_segment(seg).plain == "quick"
+
+
 def test_superseded_segment_is_struck_through() -> None:
     """A just-superseded segment is rendered with the strike style."""
     seg = SegmentView(segment_id="s0", text="old text", state="final", just_superseded=True)

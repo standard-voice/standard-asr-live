@@ -264,8 +264,9 @@ the live view must show *in-progress* `partial` text and its *stable text*
 boundary — neither of which appears in the reduced `TranscriptionResult` (which
 contains only committed `final` segments). The app therefore keeps its own view
 state for the screen and uses `session.result()` for the authoritative final
-output and export. The two are reconciled at `done` (a debug assertion checks the
-committed finals match).
+output and export. No code in `src/` compares the two at runtime;
+`tests/test_streaming_e2e.py` pins that `committed_text()` equals
+`session.result().text` once every segment is committed.
 
 ### 4.2 Why a reducer, not ad-hoc mutation
 
